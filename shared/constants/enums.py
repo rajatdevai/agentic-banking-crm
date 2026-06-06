@@ -33,6 +33,7 @@ class EventType(str, Enum):
     PROMOTION = "promotion"
     WEALTH_MIGRATION = "wealth_migration"
     RETIREMENT_PLANNING = "retirement_planning"
+    NEW_BORN = "new_born"
 
 
 class ProductType(str, Enum):
@@ -42,8 +43,14 @@ class ProductType(str, Enum):
     EDUCATION_LOAN = "education_loan"
     WORKING_CAPITAL_LOAN = "working_capital_loan"
     LOAN_AGAINST_SECURITIES = "loan_against_securities"
+    GOLD_LOAN = "gold_loan"
     WEALTH_ADVISORY = "wealth_advisory"
+    MUTUAL_FUND = "mutual_fund"
+    FIXED_DEPOSIT = "fixed_deposit"
     FOREX_CARD = "forex_card"
+    CURRENT_ACCOUNT = "current_account"
+    HEALTH_INSURANCE = "health_insurance"
+    CHILD_EDUCATION_PLAN = "child_education_plan"
     PREMIUM_CREDIT_CARD = "premium_credit_card"
     INSURANCE = "insurance"
     BUSINESS_CREDIT_CARD = "business_credit_card"
@@ -89,6 +96,7 @@ class TransactionDirection(str, Enum):
 
 class KYCStatus(str, Enum):
     """Customer KYC verification state — expired KYC blocks product recommendations."""
+    FULL = "full"
     COMPLETE = "complete"
     PENDING = "pending"
     EXPIRED = "expired"

@@ -1,0 +1,27 @@
+# Dockerfile for the gateway service and shared worker/beat containers
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install system dependencies required for asyncpg, presidio, etc.
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    libpq-dev \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Poetry
+RUN pip install poetry==1.8.3
+
+# Copy dependency files first for layer caching
+COPY pyproject.toml poetry.lock* ./
+
+# Install dependencies without creating a virtual env (we're in a container)
+RUN poetry config virtualenvs.create false \
+    && poetry install --no-interaction --no-ansi --no-root
+
+# Copy the full project source
+COPY . .
+
+# Default command — overridden by docker-compose per service
+CMD ["uvicorn", "services.gateway.main:app", "--host", "0.0.0.0", "--port", "8000"]

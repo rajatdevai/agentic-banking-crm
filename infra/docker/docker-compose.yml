@@ -1,0 +1,77 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: timescale/timescaledb-ha:pg16-latest
+    environment:
+      POSTGRES_DB: rmcopilot
+      POSTGRES_USER: rmcopilot
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rmcopilot"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7.2-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  gateway:
+    build:
+      context: ../../
+      dockerfile: infra/docker/Dockerfile.gateway
+    ports:
+      - "8000:8000"
+    env_file: ../../.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ../../:/app
+    command: uvicorn services.gateway.main:app --host 0.0.0.0 --port 8000 --reload
+
+  worker:
+    build:
+      context: ../../
+      dockerfile: infra/docker/Dockerfile.gateway
+    env_file: ../../.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ../../:/app
+    command: celery -A services.workers.celery_app worker --loglevel=info --queues=scoring,events,outreach,embeddings
+
+  beat:
+    build:
+      context: ../../
+      dockerfile: infra/docker/Dockerfile.gateway
+    env_file: ../../.env
+    depends_on:
+      - worker
+    volumes:
+      - ../../:/app
+    command: celery -A services.workers.celery_app beat --loglevel=info --scheduler celery.beat:PersistentScheduler
+
+volumes:
+  postgres_data:
+  redis_data:

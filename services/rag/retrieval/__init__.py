@@ -1,1 +1,1 @@
-# RAG retrieval pipeline package.
+"""RAG retrieval pipeline."""

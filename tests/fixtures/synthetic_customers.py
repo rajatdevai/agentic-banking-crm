@@ -250,7 +250,7 @@ async def seed_to_db(db, synthetic: SyntheticCustomer) -> SyntheticCustomer:
         Transaction,
     )
     from shared.constants.enums import (
-        KYCStatus, PersonaType, RiskTier,
+        KYCStatus, PersonaType, RiskTier, TransactionType,
     )
 
     customer_uuid = uuid.UUID(synthetic.customer_id)
@@ -261,7 +261,7 @@ async def seed_to_db(db, synthetic: SyntheticCustomer) -> SyntheticCustomer:
         id=rm_uuid,
         email=f"rm_{synthetic.rm_id[:8]}@testbank.com",
         hashed_password="$2b$12$dummyhashdummyhashdummyhashdummy",
-        full_name="Test RM",
+        name="Test RM",
         branch_code="TEST001",
         is_active=True,
     )
@@ -299,6 +299,7 @@ async def seed_to_db(db, synthetic: SyntheticCustomer) -> SyntheticCustomer:
             customer_id=customer_uuid,
             amount=txn.amount,
             direction=TransactionDirection(txn.direction),
+            txn_type=TransactionType.UPI,   # Default type for test data
             merchant_name=txn.merchant_name,
             merchant_category=txn.merchant_category,
             txn_at=now - timedelta(days=txn.days_ago),

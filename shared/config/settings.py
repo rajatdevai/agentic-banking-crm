@@ -215,6 +215,7 @@ class Settings(BaseSettings):
 
     # RAG
     VECTOR_SIMILARITY_THRESHOLD: float = Field(0.75)
+    RAG_SIMILARITY_THRESHOLD: float = Field(0.70)   # Alias used by retriever (slightly lower for better recall)
     RAG_TOP_K: int = Field(5)
     RAG_RETRIEVAL_CANDIDATES: int = Field(30)
 

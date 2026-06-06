@@ -1,1 +1,1 @@
-# RAG ingestion pipeline package.
+"""RAG ingestion pipeline."""

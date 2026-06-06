@@ -249,6 +249,10 @@ class Transaction(Base):
     txn_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, index=True
     )
+    notes: Mapped[str | None] = mapped_column(
+        String(500), nullable=True,
+        comment="Optional notes for testing and audit (not a customer-facing field)"
+    )
 
     # Relationship
     customer: Mapped["Customer"] = relationship(
@@ -519,4 +523,74 @@ class AgentExecutionLog(Base):
         return (
             f"<AgentExecutionLog id={self.id} agent={self.agent_name} "
             f"session={self.session_id}>"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Table 9 — knowledge_embeddings  (RAG vector store)
+# ---------------------------------------------------------------------------
+class KnowledgeEmbedding(Base):
+    """
+    Stores chunked knowledge base documents with their vector embeddings.
+
+    content_hash (SHA256 of chunk_text) enables idempotent ingestion —
+    chunks with an identical hash are skipped during backfill.
+
+    embedding uses the pgvector VECTOR type (1536 dims — Matryoshka truncation
+    of text-embedding-3-large's native 3072 dims).
+
+    HNSW index is defined in the Alembic migration for efficient cosine search.
+    pg_trgm GIN index on chunk_text enables fast keyword/full-text search.
+    """
+
+    __tablename__ = "knowledge_embeddings"
+    __table_args__ = (
+        UniqueConstraint("content_hash", name="uq_knowledge_embeddings_content_hash"),
+        Index("ix_knowledge_embeddings_doc_type", "doc_type"),
+        Index("ix_knowledge_embeddings_source_file", "source_file"),
+        # GIN index for pg_trgm full-text — created in migration
+        # HNSW index for pgvector cosine — created in migration
+    )
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    doc_type: Mapped[str] = mapped_column(
+        String(50), nullable=False,
+        comment="Collection: product_catalog | policy_docs | persona_playbooks | market_context"
+    )
+    source_file: Mapped[str] = mapped_column(
+        String(255), nullable=False,
+        comment="Relative path from knowledge_base/ e.g. product_catalog/personal_loan_eligibility.md"
+    )
+    chunk_index: Mapped[int] = mapped_column(
+        Integer, nullable=False,
+        comment="Position of this chunk within the source document (0-indexed)"
+    )
+    chunk_text: Mapped[str] = mapped_column(Text, nullable=False)
+    content_hash: Mapped[str] = mapped_column(
+        String(64), nullable=False, unique=True,
+        comment="SHA256 of chunk_text — used for idempotent upsert"
+    )
+    token_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    embedding: Mapped[list[float]] = mapped_column(
+        ARRAY(Float), nullable=True,
+        comment="1536-dim vector (Matryoshka truncation of text-embedding-3-large)"
+    )
+    version: Mapped[str | None] = mapped_column(
+        String(50), nullable=True,
+        comment="Document version from file metadata"
+    )
+    effective_date: Mapped[str | None] = mapped_column(
+        String(20), nullable=True,
+        comment="Effective date from document front matter"
+    )
+    indexed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<KnowledgeEmbedding id={self.id} doc_type={self.doc_type} "
+            f"source={self.source_file} chunk={self.chunk_index}>"
         )

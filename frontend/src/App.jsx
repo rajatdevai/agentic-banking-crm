@@ -444,6 +444,11 @@ export default function App() {
   }, [theme]);
 
   useEffect(() => {
+    // Force scroll reset to fix viewport shifting issue
+    window.scrollTo(0, 0);
+    if (document.body) document.body.scrollTop = 0;
+    if (document.documentElement) document.documentElement.scrollTop = 0;
+
     const timer = setTimeout(() => {
       checkHealth();
       if (token) {

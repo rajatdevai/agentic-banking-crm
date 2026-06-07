@@ -410,6 +410,7 @@
   padding: 16px 20px;
   cursor: pointer;
   transition: all 0.2s ease-in-out;
+  flex-shrink: 0;
 }
 
 .customer-card.selected {

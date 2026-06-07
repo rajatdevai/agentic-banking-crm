@@ -40,9 +40,18 @@ _settings = DatabaseSettings()
 # For a persistent server with stable DB connections, swap to:
 #   engine = create_async_engine(url, pool_size=..., max_overflow=...)
 # ---------------------------------------------------------------------------
+# Configure connection arguments (SSL) for cloud-hosted database providers (e.g. Neon, Supabase)
+db_url = _settings.DATABASE_URL
+connect_args = {}
+if "sslmode=" in db_url or "neon.tech" in db_url or "supabase" in db_url:
+    connect_args["ssl"] = True
+    if "?" in db_url:
+        db_url = db_url.split("?", 1)[0]
+
 engine = create_async_engine(
-    _settings.DATABASE_URL,
+    db_url,
     poolclass=NullPool,
+    connect_args=connect_args,
     echo=False,          # Set to True for SQL query logging during development
     future=True,
 )
@@ -79,3 +88,8 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
             raise
         finally:
             await session.close()
+
+
+# Alias for backwards compatibility with Celery tasks
+get_async_session = get_db
+

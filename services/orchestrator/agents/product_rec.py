@@ -90,6 +90,8 @@ class ProductRecAgent(BaseAgent):
                         query=query,
                         collection="product_catalog",
                         top_k=3,
+                        db=self._db,
+                        redis_client=self._redis,
                     )
                     for chunk in rag_results:
                         citations.append(RAGCitation(

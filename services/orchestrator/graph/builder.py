@@ -141,7 +141,7 @@ def build_scoring_graph(
     builder.add_node("customer_intel",    _make_node(customer_intel_agent))
     builder.add_node("transaction_intel", _make_node(transaction_intel_agent))
     builder.add_node("event_detection",   _make_node(event_detection_agent))
-    builder.add_node("risk_assessment",   _make_node(risk_assessment_agent))
+    builder.add_node("risk_assessment_agent", _make_node(risk_assessment_agent))
     builder.add_node("opportunity_scoring", _make_node(opportunity_agent))
     builder.add_node("product_rec",       _make_node(product_rec_agent))
     builder.add_node("explainability",    _make_node(explainability_agent))
@@ -152,27 +152,23 @@ def build_scoring_graph(
     # --- Entry point ---
     builder.add_edge(START, "customer_intel")
 
-    # --- Fan-out: customer_intel → transaction_intel + event_detection (parallel) ---
+    # --- Sequential execution of intel and event detection ---
     builder.add_edge("customer_intel", "transaction_intel")
-    builder.add_edge("customer_intel", "event_detection")
+    builder.add_edge("transaction_intel", "event_detection")
 
-    # --- Fan-in: both transaction_intel and event_detection → risk_assessment ---
-    # LangGraph merges state from both parallel branches before advancing
-    # Conditional edge on event_detection output
+    # --- Conditional edge on event_detection output ---
     builder.add_conditional_edges(
         "event_detection",
         route_after_event_detection,
         {
-            "risk_assessment": "risk_assessment",
+            "risk_assessment": "risk_assessment_agent",
             "no_opportunity_node": "no_opportunity_node",
         },
     )
-    # transaction_intel always feeds into risk_assessment
-    builder.add_edge("transaction_intel", "risk_assessment")
 
     # --- Conditional edge after risk assessment ---
     builder.add_conditional_edges(
-        "risk_assessment",
+        "risk_assessment_agent",
         route_after_risk_assessment,
         {
             "opportunity_scoring": "opportunity_scoring",

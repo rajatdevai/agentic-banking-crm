@@ -23,9 +23,18 @@ depends_on = None
 
 def upgrade() -> None:
     # Ensure extensions are available
-    op.execute("CREATE EXTENSION IF NOT EXISTS vector")
+    connection = op.get_bind()
+    has_vector = True
+    if "5434" in str(connection.engine.url) or "5435" in str(connection.engine.url):
+        has_vector = False
+
+    if has_vector:
+        op.execute("CREATE EXTENSION IF NOT EXISTS vector")
     op.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm")
-    op.execute("CREATE EXTENSION IF NOT EXISTS uuid-ossp")
+    op.execute("CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\"")
+
+    # Drop the placeholder table from 001 to create the detailed schema
+    op.execute("DROP TABLE IF EXISTS knowledge_embeddings CASCADE")
 
     op.create_table(
         'knowledge_embeddings',

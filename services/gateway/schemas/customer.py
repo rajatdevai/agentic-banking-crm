@@ -20,6 +20,7 @@ class CustomerSummaryResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     customer_id: uuid.UUID
+    name: Optional[str] = None
     persona_type: PersonaType
     risk_tier: RiskTier
     kyc_status: KYCStatus
@@ -38,6 +39,9 @@ class CustomerProfileResponse(BaseModel):
 
     customer_id: uuid.UUID
     rm_id: uuid.UUID
+    name: Optional[str] = None
+    phone: Optional[str] = None
+    email: Optional[str] = None
     persona_type: PersonaType
     risk_tier: RiskTier
     kyc_status: KYCStatus
@@ -65,3 +69,4 @@ class PriorityQueueResponse(BaseModel):
     total: int
     cached: bool = False
     cache_age_seconds: Optional[int] = None
+

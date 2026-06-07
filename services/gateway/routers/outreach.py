@@ -18,7 +18,7 @@ import uuid
 from datetime import datetime, timezone
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -53,6 +53,7 @@ router = APIRouter(prefix="/outreach", tags=["Outreach"])
 )
 async def generate_outreach(
     body: OutreachGenerateRequest,
+    request: Request,
     current_rm: RelationshipManager = Depends(get_current_rm),
     db: AsyncSession = Depends(get_db),
 ):
@@ -72,8 +73,11 @@ async def generate_outreach(
         )
 
     # Validate opportunity belongs to this customer
+    from sqlalchemy.orm import selectinload
     opp_result = await db.execute(
-        select(Opportunity).where(
+        select(Opportunity)
+        .options(selectinload(Opportunity.event))
+        .where(
             Opportunity.id == body.opportunity_id,
             Opportunity.customer_id == body.customer_id,
             Opportunity.deleted_at.is_(None),
@@ -86,21 +90,84 @@ async def generate_outreach(
             detail=f"Opportunity {body.opportunity_id} not found for this customer.",
         )
 
-    # TODO (Phase 5): invoke the full OutreachGenAgent via LangGraph
-    # For now, return a placeholder that demonstrates the correct structure.
-    # The agent will replace this in Phase 5.
-    placeholder_message = (
-        f"[DRAFT — OutreachGenAgent not yet connected — Phase 5]\n\n"
-        f"Channel: {body.channel.value}\n"
-        f"Opportunity: {opportunity.product_recommended}\n"
-        f"Priority Score: {opportunity.priority_score}"
+    # Load customer profile snapshot
+    from shared.db.models import CustomerProfile as CustomerProfileORM
+    profile_result = await db.execute(
+        select(CustomerProfileORM).where(CustomerProfileORM.customer_id == customer.id)
     )
+    customer_profile_orm = profile_result.scalar_one_or_none()
+
+    # Import agent contracts & state models
+    from shared.constants.enums import EventType
+    from shared.models.agent_state import CustomerProfile, Opportunity as StateOpportunity
+    from services.orchestrator.agents.outreach_gen import OutreachGenAgent
+
+    profile_state = CustomerProfile(
+        customer_id=str(customer.id),
+        rm_id=str(customer.rm_id),
+        persona_type=customer.persona_type,
+        risk_tier=customer.risk_tier,
+        kyc_status=customer.kyc_status,
+        relationship_tenure_months=customer.relationship_tenure_months,
+        salary_avg_3m=float(customer_profile_orm.salary_avg_3m) if customer_profile_orm and customer_profile_orm.salary_avg_3m else None,
+        avg_balance_3m=float(customer_profile_orm.avg_balance_3m) if customer_profile_orm and customer_profile_orm.avg_balance_3m else None,
+        total_investments=float(customer_profile_orm.total_investments) if customer_profile_orm and customer_profile_orm.total_investments else None,
+        total_liabilities=float(customer_profile_orm.total_liabilities) if customer_profile_orm and customer_profile_orm.total_liabilities else None,
+        credit_score=customer_profile_orm.credit_score if customer_profile_orm else None,
+        product_holdings=customer_profile_orm.product_holdings if customer_profile_orm else {},
+        behavioral_tags=customer_profile_orm.behavioral_tags if customer_profile_orm else [],
+        last_refreshed_at=customer_profile_orm.last_refreshed_at if customer_profile_orm else None,
+    )
+
+    opp_state = StateOpportunity(
+        customer_id=str(opportunity.customer_id),
+        event_type=opportunity.event.event_type if opportunity.event else EventType.TRANSACTION_ALERT,
+        product_recommended=opportunity.product_recommended,
+        priority_score=float(opportunity.priority_score),
+        conversion_probability=float(opportunity.conversion_prob),
+        revenue_potential=float(opportunity.revenue_potential) if opportunity.revenue_potential else None,
+        risk_flags=opportunity.risk_flags,
+        scoring_method="database",
+        db_opportunity_id=str(opportunity.id),
+    )
+
+    # Build AgentState dict
+    session_id = request.headers.get("X-Session-ID") or str(uuid.uuid4())
+    trace_id = getattr(request.state, "trace_id", str(uuid.uuid4()))
+
+    state = {
+        "customer_id": str(customer.id),
+        "rm_id": str(customer.rm_id),
+        "session_id": session_id,
+        "trace_id": trace_id,
+        "customer_profile": profile_state,
+        "opportunities": [opp_state],
+        "explanation": opportunity.explanation,
+        "recommended_products": [],
+        "requested_channels": [body.channel],
+    }
+
+    redis = request.app.state.redis
+    agent = OutreachGenAgent(db=db, redis=redis)
+    agent_result = await agent.run(state)
+
+    messages = agent_result.get("outreach_messages") or []
+    if not messages:
+        errors = agent_result.get("errors") or []
+        error_msg = "; ".join(errors) if errors else "Failed to generate outreach message."
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=error_msg,
+        )
+
+    generated_message = messages[0].message_body
 
     campaign = OutreachCampaign(
         opportunity_id=opportunity.id,
         channel=body.channel,
-        message_body=placeholder_message,
+        message_body=generated_message,
         persona_tone=customer.persona_type.value,
+        session_id=session_id,
     )
     db.add(campaign)
     await db.commit()
@@ -119,7 +186,7 @@ async def generate_outreach(
         customer_id=body.customer_id,
         opportunity_id=body.opportunity_id,
         channel=body.channel,
-        message_body=placeholder_message,
+        message_body=generated_message,
         persona_tone=customer.persona_type.value,
         generated_at=datetime.now(timezone.utc),
     )
@@ -141,6 +208,7 @@ async def generate_outreach(
 async def approve_outreach(
     campaign_id: uuid.UUID,
     body: OutreachApproveRequest,
+    request: Request,
     current_rm: RelationshipManager = Depends(get_current_rm),
     db: AsyncSession = Depends(get_db),
 ):
@@ -173,16 +241,24 @@ async def approve_outreach(
     if body.edited_message:
         campaign.message_body = body.edited_message
 
-    # TODO (Phase 8): queue Celery task — run_outreach_dispatch.delay(str(campaign.id))
-    # For now, log the approval intent
+    # Capture current session ID from request state or headers
+    session_id = request.headers.get("X-Session-ID") or getattr(request.state, "session_id", None)
+    if session_id:
+        campaign.session_id = session_id
+
+    await db.commit()
+
+    # Queue Celery task
+    from services.workers.tasks.outreach_dispatch import dispatch_campaign
+    dispatch_campaign.delay(str(campaign_id))
+
     logger.info(
         "outreach_approved_by_rm",
         rm_id=str(current_rm.id),
         campaign_id=str(campaign_id),
         edited=body.edited_message is not None,
+        session_id=session_id
     )
-
-    await db.commit()
 
     return {
         "message": "Outreach approved and queued for dispatch.",

@@ -29,6 +29,7 @@ async def login(
     body: LoginRequest,
     db: AsyncSession = Depends(get_db),
 ) -> TokenResponse:
+    logger.info("login_attempt_details", email=body.email, password_len=len(body.password))
     token = await authenticate_rm(
         email=body.email,
         password=body.password,

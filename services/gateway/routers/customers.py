@@ -94,6 +94,7 @@ async def get_priority_queue(
         customers_out.append(
             CustomerSummaryResponse(
                 customer_id=customer.id,
+                name=customer.name,
                 persona_type=customer.persona_type,
                 risk_tier=customer.risk_tier,
                 kyc_status=customer.kyc_status,
@@ -149,6 +150,9 @@ async def get_customer_profile(
     return CustomerProfileResponse(
         customer_id=customer.id,
         rm_id=customer.rm_id,
+        name=customer.name,
+        phone=customer.phone,
+        email=customer.email,
         persona_type=customer.persona_type,
         risk_tier=customer.risk_tier,
         kyc_status=customer.kyc_status,

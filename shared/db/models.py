@@ -33,7 +33,12 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from sqlalchemy import Enum as PgEnum
+from sqlalchemy import Enum as BaseEnum
+
+class PgEnum(BaseEnum):
+    def __init__(self, *args, **kwargs):
+        kwargs.setdefault("values_callable", lambda x: [e.value for e in x])
+        super().__init__(*args, **kwargs)
 
 from shared.db.base import Base, TimestampMixin
 from shared.constants.enums import (
@@ -118,6 +123,9 @@ class Customer(Base, TimestampMixin):
     external_cbs_id: Mapped[str | None] = mapped_column(
         String(512), nullable=True, comment="Fernet-encrypted CBS account ID"
     )
+    name: Mapped[str | None] = mapped_column(String(255), nullable=True, default=None)
+    phone: Mapped[str | None] = mapped_column(String(20), nullable=True, default=None)
+    email: Mapped[str | None] = mapped_column(String(255), nullable=True, default=None)
     persona_type: Mapped[PersonaType] = mapped_column(
         PgEnum(PersonaType, name="personatype", create_type=True),
         nullable=False,
@@ -247,7 +255,7 @@ class Transaction(Base):
     )
     channel: Mapped[str | None] = mapped_column(String(50), nullable=True)
     txn_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, index=True
+        DateTime(timezone=True), nullable=False
     )
     notes: Mapped[str | None] = mapped_column(
         String(500), nullable=True,
@@ -393,7 +401,6 @@ class Opportunity(Base, TimestampMixin):
         PgEnum(OpportunityStatus, name="opportunitystatus", create_type=True),
         nullable=False,
         default=OpportunityStatus.NEW,
-        index=True,
     )
 
     # Relationships
@@ -456,6 +463,7 @@ class OutreachCampaign(Base):
         String(255), nullable=True,
         comment="Message ID from WhatsApp/Twilio/SendGrid for delivery receipt correlation"
     )
+    session_id: Mapped[str | None] = mapped_column(String(100), nullable=True, default=None)
 
     # Relationship
     opportunity: Mapped["Opportunity"] = relationship(
@@ -594,3 +602,24 @@ class KnowledgeEmbedding(Base):
             f"<KnowledgeEmbedding id={self.id} doc_type={self.doc_type} "
             f"source={self.source_file} chunk={self.chunk_index}>"
         )
+
+
+# ---------------------------------------------------------------------------
+# Table 10 — dnd_registry
+# ---------------------------------------------------------------------------
+class DNDRegistry(Base):
+    """
+    Registry of phone numbers and email addresses that are opted out of marketing.
+    """
+    __tablename__ = "dnd_registry"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    phone: Mapped[str | None] = mapped_column(String(20), unique=True, index=True, nullable=True)
+    email: Mapped[str | None] = mapped_column(String(255), unique=True, index=True, nullable=True)
+    opted_out_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    def __repr__(self) -> str:
+        return f"<DNDRegistry id={self.id} phone={self.phone} email={self.email}>"
+

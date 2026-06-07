@@ -258,6 +258,17 @@ poetry run uvicorn services.gateway.main:app --reload --port 8000
 poetry run celery -A services.workers.celery_app worker --loglevel=info
 ```
 
+### 9. Start frontend dashboard (separate terminal)
+```bash
+cd frontend
+npm install
+npm run dev
+```
+Open http://localhost:5173 in your browser.
+Log in with demo relationship manager credentials:
+- Email: `priya@bank.com`
+- Password: `password123`
+
 ### API Documentation
 After starting the gateway, visit:
 - Swagger UI: http://localhost:8000/docs

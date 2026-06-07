@@ -296,6 +296,7 @@ async def seed_to_db(db, synthetic: SyntheticCustomer) -> SyntheticCustomer:
     for txn in synthetic.transactions:
         from shared.constants.enums import TransactionDirection
         t = Transaction(
+            id=uuid.uuid4(),
             customer_id=customer_uuid,
             amount=txn.amount,
             direction=TransactionDirection(txn.direction),

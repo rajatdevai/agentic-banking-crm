@@ -91,7 +91,13 @@ class RMCopilotAgent(BaseAgent):
         async def _fetch_one(collection: str) -> str:
             try:
                 from services.orchestrator.tools.vector_tools import hybrid_search
-                results = await hybrid_search(query=question, collection=collection, top_k=2)
+                results = await hybrid_search(
+                    query=question,
+                    collection=collection,
+                    top_k=2,
+                    db=self._db,
+                    redis_client=self._redis,
+                )
                 return "\n".join(r.get("content", "")[:300] for r in results)
             except Exception as exc:
                 logger.warning("copilot_rag_failed", collection=collection, error=str(exc))

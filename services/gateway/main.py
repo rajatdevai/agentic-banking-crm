@@ -34,7 +34,7 @@ from sqlalchemy import text
 from services.gateway.middleware.audit import AuditMiddleware
 from services.gateway.middleware.pii_mask import PIIMaskMiddleware
 from services.gateway.middleware.rate_limiter import RateLimiterMiddleware
-from services.gateway.routers import auth, chat, customers, outreach
+from services.gateway.routers import auth, chat, customers, outreach, webhooks
 from shared.config.settings import get_settings
 from shared.db.session import engine
 
@@ -52,7 +52,6 @@ def _configure_logging() -> None:
         structlog.contextvars.merge_contextvars,
         structlog.processors.add_log_level,
         structlog.processors.TimeStamper(fmt="iso"),
-        structlog.stdlib.add_logger_name,
     ]
 
     try:
@@ -184,6 +183,7 @@ app.include_router(auth.router)
 app.include_router(customers.router)
 app.include_router(outreach.router)
 app.include_router(chat.router)
+app.include_router(webhooks.router)
 
 
 # ---------------------------------------------------------------------------

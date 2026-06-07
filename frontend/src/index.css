@@ -1,0 +1,326 @@
+/* ==============================================================================
+   RM Copilot — Custom Styling & Animation System (Vanilla CSS)
+   ============================================================================== */
+
+/* Font & Layout resets */
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  transition: background-color 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease;
+}
+
+/* Custom scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: var(--bg-scroll-track);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--bg-scroll-thumb);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--accent-color);
+}
+
+/* Theme variables */
+:root {
+  /* Dark Theme (Default) */
+  --bg-app: #080710;
+  --bg-app-rgb: 8, 7, 16;
+  --bg-panel: rgba(20, 18, 38, 0.45);
+  --bg-panel-solid: #121020;
+  --border-color: rgba(255, 255, 255, 0.08);
+  --border-hover: rgba(255, 255, 255, 0.16);
+  --text-main: #f3f4f6;
+  --text-muted: #9ca3af;
+  --accent-color: #5d5bf4;
+  --accent-glow: rgba(93, 91, 244, 0.25);
+  --accent-hover: #7b79f8;
+  
+  --priority-high: #ff4a5a;
+  --priority-high-glow: rgba(255, 74, 90, 0.15);
+  --priority-medium: #ff9f1c;
+  --priority-medium-glow: rgba(255, 159, 28, 0.15);
+  --priority-low: #2ec4b6;
+  --priority-low-glow: rgba(46, 196, 182, 0.15);
+  
+  --bg-scroll-track: #0f0d1e;
+  --bg-scroll-thumb: #28244c;
+  
+  --sidebar-width: 260px;
+  --header-height: 70px;
+}
+
+:root.light {
+  /* Light Theme */
+  --bg-app: #f4f6fc;
+  --bg-app-rgb: 244, 246, 252;
+  --bg-panel: rgba(255, 255, 255, 0.65);
+  --bg-panel-solid: #ffffff;
+  --border-color: rgba(0, 0, 0, 0.06);
+  --border-hover: rgba(0, 0, 0, 0.12);
+  --text-main: #1f2937;
+  --text-muted: #6b7280;
+  --accent-color: #4f46e5;
+  --accent-glow: rgba(79, 70, 229, 0.12);
+  --accent-hover: #4338ca;
+  
+  --priority-high: #dc2626;
+  --priority-high-glow: rgba(220, 38, 38, 0.1);
+  --priority-medium: #d97706;
+  --priority-medium-glow: rgba(217, 119, 6, 0.1);
+  --priority-low: #059669;
+  --priority-low-glow: rgba(5, 150, 105, 0.1);
+  
+  --bg-scroll-track: #e5e7eb;
+  --bg-scroll-thumb: #cbd5e1;
+}
+
+/* Root layout */
+body, html, #root {
+  width: 100%;
+  height: 100%;
+  background-color: var(--bg-app);
+  color: var(--text-main);
+  overflow: hidden;
+}
+
+/* Background Canvas Glow Elements */
+.glow-spot {
+  position: absolute;
+  width: 40vw;
+  height: 40vw;
+  border-radius: 50%;
+  background: radial-gradient(circle, var(--accent-glow) 0%, rgba(var(--bg-app-rgb), 0) 70%);
+  z-index: 0;
+  pointer-events: none;
+  filter: blur(80px);
+}
+.glow-spot-1 { top: -10vw; right: -5vw; }
+.glow-spot-2 { bottom: -10vw; left: -10vw; }
+
+/* Grid and Glass Classes */
+.glass-panel {
+  background: var(--bg-panel);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--border-color);
+  border-radius: 16px;
+  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.2);
+}
+
+.glass-panel:hover {
+  border-color: var(--border-hover);
+}
+
+.gradient-text {
+  background: linear-gradient(135deg, var(--text-main) 30%, var(--accent-color) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+/* Animations */
+@keyframes float {
+  0% { transform: translateY(0px); }
+  50% { transform: translateY(-4px); }
+  100% { transform: translateY(0px); }
+}
+
+@keyframes pulse {
+  0% { box-shadow: 0 0 0 0 rgba(var(--pulse-color-rgb), 0.4); }
+  70% { box-shadow: 0 0 0 10px rgba(var(--pulse-color-rgb), 0); }
+  100% { box-shadow: 0 0 0 0 rgba(var(--pulse-color-rgb), 0); }
+}
+
+@keyframes slideIn {
+  from { opacity: 0; transform: translateY(16px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes accordionExpand {
+  from { height: 0; opacity: 0; }
+  to { height: var(--accordion-height, auto); opacity: 1; }
+}
+
+/* Apply animation classes */
+.float-anim {
+  animation: float 4s ease-in-out infinite;
+}
+
+.slide-in-anim {
+  animation: slideIn 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* Theme switch button animation */
+.theme-toggle {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 8px;
+  border-radius: 50%;
+  color: var(--text-main);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.3s ease, background-color 0.2s ease;
+}
+.theme-toggle:hover {
+  background-color: var(--border-color);
+  transform: rotate(45deg);
+}
+
+/* Custom buttons */
+.btn-glow {
+  background: linear-gradient(135deg, var(--accent-color) 0%, var(--accent-hover) 100%);
+  color: #fff;
+  border: none;
+  padding: 10px 20px;
+  font-weight: 500;
+  border-radius: 8px;
+  cursor: pointer;
+  box-shadow: 0 4px 14px 0 var(--accent-glow);
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.btn-glow:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 20px 0 var(--accent-glow);
+}
+.btn-glow:active {
+  transform: translateY(0);
+}
+
+.btn-secondary {
+  background: transparent;
+  color: var(--text-main);
+  border: 1px solid var(--border-color);
+  padding: 10px 20px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background-color 0.2s ease, border-color 0.2s ease;
+}
+.btn-secondary:hover {
+  background-color: var(--border-color);
+  border-color: var(--border-hover);
+}
+
+/* Priority Indicator Tags */
+.priority-tag {
+  padding: 4px 10px;
+  border-radius: 20px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.priority-tag.high {
+  color: var(--priority-high);
+  background-color: var(--priority-high-glow);
+  --pulse-color-rgb: 255, 74, 90;
+  animation: pulse 2s infinite;
+}
+.priority-tag.medium {
+  color: var(--priority-medium);
+  background-color: var(--priority-medium-glow);
+  --pulse-color-rgb: 255, 159, 28;
+  animation: pulse 2s infinite;
+}
+.priority-tag.low {
+  color: var(--priority-low);
+  background-color: var(--priority-low-glow);
+}
+
+/* Event Signal Chips */
+.signal-chip {
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 0.75rem;
+  background-color: var(--border-color);
+  color: var(--text-muted);
+  border: 1px solid var(--border-color);
+}
+
+/* RAG Citation Card animations */
+.cit-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background-color: var(--border-color);
+  color: var(--accent-color);
+  font-size: 0.7rem;
+  font-weight: 700;
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  cursor: pointer;
+  margin-left: 4px;
+  vertical-align: super;
+  position: relative;
+  transition: background-color 0.2s, color 0.2s;
+}
+.cit-badge:hover {
+  background-color: var(--accent-color);
+  color: white;
+}
+.cit-tooltip {
+  position: absolute;
+  bottom: 120%;
+  left: 50%;
+  transform: translateX(-50%);
+  background-color: var(--bg-panel-solid);
+  border: 1px solid var(--border-hover);
+  color: var(--text-main);
+  padding: 10px;
+  border-radius: 8px;
+  width: 250px;
+  font-size: 0.75rem;
+  font-weight: 400;
+  line-height: 1.4;
+  box-shadow: 0 10px 25px rgba(0,0,0,0.3);
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.2s, visibility 0.2s;
+  z-index: 100;
+}
+.cit-badge:hover .cit-tooltip {
+  opacity: 1;
+  visibility: visible;
+}
+
+/* Interactive Card highlight hover */
+.glow-card {
+  position: relative;
+  overflow: hidden;
+}
+.glow-card::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: radial-gradient(800px circle at var(--mouse-x, 0) var(--mouse-y, 0), rgba(255, 255, 255, 0.05), transparent 40%);
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* Shimmer placeholder */
+.shimmer {
+  background: linear-gradient(90deg, var(--border-color) 25%, var(--border-hover) 50%, var(--border-color) 75%);
+  background-size: 200% 100%;
+  animation: shimmerAnim 1.5s infinite;
+}
+@keyframes shimmerAnim {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}

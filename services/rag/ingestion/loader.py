@@ -101,6 +101,9 @@ def _load_single_file(
 ) -> LoadedDocument:
     """Load a single markdown file and extract its metadata."""
     raw_text = md_file.read_text(encoding="utf-8")
+    # Replace Rupee symbol and normalize to cp1252-compatible text to prevent insertion issues on Windows
+    raw_text = raw_text.replace("₹", "Rs.")
+    raw_text = raw_text.encode("cp1252", errors="replace").decode("cp1252")
     source_file = str(md_file.relative_to(kb_root)).replace("\\", "/")
 
     # File modification time as fallback version
@@ -131,7 +134,7 @@ def _extract_version(text: str, fallback_mtime: datetime) -> str:
         # Clean up markdown bold syntax
         version_str = re.sub(r"\*+", "", version_str).strip()
         if version_str:
-            return version_str
+            return version_str[:50]
     return fallback_mtime.strftime("%Y-%m-%d")
 
 

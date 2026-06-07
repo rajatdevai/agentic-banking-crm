@@ -53,6 +53,13 @@ async def embed_chunks(
         embedding_vector is a list of 1536 floats (normalised, unit-length).
     """
     settings = get_settings()
+    if settings.OPENAI_API_KEY.startswith("sk-...") or not settings.OPENAI_API_KEY:
+        results: list[tuple[DocumentChunk, list[float]]] = []
+        for chunk in chunks:
+            results.append((chunk, [0.0] * _EMBEDDING_DIMENSIONS))
+        logger.info("embedding_complete_dummy", total_chunks=len(results))
+        return results
+
     client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY, timeout=60.0)
 
     results: list[tuple[DocumentChunk, list[float]]] = []
@@ -123,6 +130,9 @@ async def embed_query(query: str) -> list[float]:
 async def _embed_single_query(query: str) -> list[float]:
     """Embed a single query string for retrieval."""
     settings = get_settings()
+    if settings.OPENAI_API_KEY.startswith("sk-...") or not settings.OPENAI_API_KEY:
+        return [0.0] * 1536
+
     client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY, timeout=30.0)
 
     async for attempt in AsyncRetrying(

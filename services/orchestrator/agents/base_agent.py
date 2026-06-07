@@ -160,14 +160,12 @@ class BaseAgent(ABC):
         else:
             partial.update(result)
 
-        # Best-effort audit log (non-blocking)
-        asyncio.create_task(
-            self._write_audit_log(
-                state=state,
-                result=result,
-                latency_ms=latency_ms,
-                error=error_message,
-            )
+        # Best-effort audit log (awaited to prevent transaction corruption)
+        await self._write_audit_log(
+            state=state,
+            result=result,
+            latency_ms=latency_ms,
+            error=error_message,
         )
 
         return partial
@@ -243,12 +241,13 @@ class BaseAgent(ABC):
             for k, v in result.items():
                 try:
                     import json
-                    json.dumps(v, default=str)
-                    serialisable_result[k] = v
+                    # Ensure the value contains only JSON-serializable primitives
+                    serialisable_result[k] = json.loads(json.dumps(v, default=str))
                 except Exception:
                     serialisable_result[k] = str(v)[:200]
 
             log_entry = AgentExecutionLog(
+                id=uuid.uuid4(),
                 session_id=session_uuid,
                 agent_name=self.agent_name,
                 input_masked={
@@ -261,8 +260,10 @@ class BaseAgent(ABC):
                 latency_ms=latency_ms,
                 error=error,
             )
-            self._db.add(log_entry)
-            await self._db.commit()
+            from sqlalchemy.ext.asyncio import AsyncSession
+            async with AsyncSession(self._db.bind, expire_on_commit=False) as audit_db:
+                audit_db.add(log_entry)
+                await audit_db.commit()
 
         except Exception as audit_exc:
             logger.error(

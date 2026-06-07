@@ -21,15 +21,18 @@ so the frontend can be built against a stable contract immediately.
 import asyncio
 import json
 import uuid
+from datetime import date
 from typing import AsyncGenerator
 
 import structlog
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from services.gateway.middleware.auth import get_current_rm
 from shared.db.models import RelationshipManager
+from shared.db.session import get_db
 
 logger = structlog.get_logger(__name__)
 router = APIRouter(prefix="/copilot", tags=["Copilot Chat"])
@@ -62,33 +65,6 @@ async def _sse_event(data: dict) -> str:
     return f"data: {json.dumps(data)}\n\n"
 
 
-async def _stream_placeholder_response(
-    message: str, trace_id: str, session_id: str
-) -> AsyncGenerator[str, None]:
-    """
-    Placeholder streaming generator for Phase 3.
-    Streams a structured response explaining that the RMCopilotAgent will be
-    connected in Phase 5. Each 'token' is yielded with a small delay to
-    demonstrate the SSE infrastructure is working.
-
-    Phase 5 replaces this with: await rm_copilot_agent.stream(state)
-    """
-    placeholder_tokens = [
-        "RM Copilot is initialising... ",
-        "The conversational agent (RMCopilotAgent) ",
-        "will be connected in Phase 5. ",
-        "Your query has been received: ",
-        f'"{message[:80]}{"..." if len(message) > 80 else ""}" ',
-        f"Session: {session_id}",
-    ]
-
-    for token in placeholder_tokens:
-        yield await _sse_event({"token": token, "trace_id": trace_id, "done": False})
-        await asyncio.sleep(0.05)  # Simulate streaming latency
-
-    yield await _sse_event({"token": "", "trace_id": trace_id, "done": True})
-
-
 @router.post(
     "/chat",
     summary="Conversational copilot — streams response via SSE",
@@ -104,9 +80,11 @@ async def copilot_chat(
     request: Request,
     body: ChatRequest,
     current_rm: RelationshipManager = Depends(get_current_rm),
+    db: AsyncSession = Depends(get_db),
 ) -> StreamingResponse:
     trace_id = getattr(request.state, "trace_id", str(uuid.uuid4()))
     session_id = body.session_id or str(uuid.uuid4())
+    redis = request.app.state.redis
 
     logger.info(
         "copilot_chat_request",
@@ -119,21 +97,85 @@ async def copilot_chat(
 
     async def event_generator() -> AsyncGenerator[str, None]:
         try:
-            async for chunk in _stream_placeholder_response(
-                message=body.message,
-                trace_id=trace_id,
+            from services.orchestrator.agents.rm_copilot import RMCopilotAgent
+            from services.orchestrator.tools.vector_tools import search_knowledge_base
+            from services.orchestrator.llm.prompt_registry import render_prompt, PromptKey
+            from services.orchestrator.llm.router import get_llm_router
+
+            # Instantiate agent
+            agent = RMCopilotAgent(db=db, redis=redis)
+
+            # Retrieve context with citations in parallel across collections
+            citations = []
+            rag_context_parts = []
+            collections = ["product_catalog", "policy_docs", "persona_playbooks", "market_context"]
+
+            for col in collections:
+                context_res = await search_knowledge_base(
+                    query=body.message,
+                    db=db,
+                    doc_type_filter=col,
+                    redis_client=redis,
+                    top_k=2
+                )
+                if context_res.formatted_context and context_res.formatted_context != "No relevant context found in the knowledge base.":
+                    rag_context_parts.append(f"[{col.upper()}]\n{context_res.formatted_context}")
+                    for cit in context_res.source_citations:
+                        citations.append({
+                            "source": cit.get("source_file", ""),
+                            "doc_type": cit.get("doc_type", ""),
+                            "excerpt": cit.get("excerpt", "")[:250],
+                            "score": cit.get("rrf_score", 0.0)
+                        })
+
+            rag_context = "\n\n".join(rag_context_parts) or "No relevant context found in knowledge base."
+
+            # Fetch portfolio summary
+            portfolio_summary = await agent._get_portfolio_summary(str(current_rm.id))
+
+            # Build masked prompt
+            prompt = render_prompt(
+                PromptKey.RM_COPILOT_CONVERSATION,
+                rm_name=current_rm.name or "Relationship Manager",
+                rm_question=body.message,
+                portfolio_summary=portfolio_summary,
+                rag_context=rag_context,
+                current_date=date.today().isoformat(),
+            )
+
+            # PII Pre-flight guard
+            agent.assert_no_pii_in_prompt(prompt)
+
+            # Stream response token-by-token
+            async for token, is_final in get_llm_router().stream_primary(
+                prompt=prompt,
                 session_id=session_id,
             ):
-                # Check if client disconnected mid-stream
                 if await request.is_disconnected():
                     logger.info("copilot_stream_client_disconnected", trace_id=trace_id)
                     break
-                yield chunk
+                if is_final:
+                    # Final event with citations
+                    yield await _sse_event({
+                        "token": "",
+                        "trace_id": trace_id,
+                        "done": True,
+                        "citations": citations
+                    })
+                else:
+                    yield await _sse_event({
+                        "token": token,
+                        "trace_id": trace_id,
+                        "done": False
+                    })
+
         except Exception as exc:
             logger.error("copilot_stream_error", trace_id=trace_id, error=str(exc))
-            yield await _sse_event(
-                {"error": "An error occurred during streaming.", "trace_id": trace_id, "done": True}
-            )
+            yield await _sse_event({
+                "error": f"An error occurred: {type(exc).__name__}: {str(exc)}",
+                "trace_id": trace_id,
+                "done": True
+            })
 
     return StreamingResponse(
         event_generator(),

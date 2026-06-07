@@ -37,8 +37,21 @@ def upgrade() -> None:
     # as the server_default for every primary key column.
     # ------------------------------------------------------------------
     op.execute("CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\"")
-    op.execute("CREATE EXTENSION IF NOT EXISTS vector")
     op.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm")
+
+    # Check if pgvector is available
+    connection = op.get_bind()
+    result = connection.execute(sa.text("SELECT count(*) FROM pg_available_extensions WHERE name = 'vector'"))
+    has_vector = result.scalar() > 0
+
+    # Force disable vector extension on local dev ports 5434/5435
+    if "5434" in str(connection.engine.url) or "5435" in str(connection.engine.url):
+        has_vector = False
+
+    if has_vector:
+        op.execute("CREATE EXTENSION IF NOT EXISTS vector")
+
+
 
     # ------------------------------------------------------------------
     # Step 1 — PostgreSQL native ENUM types
@@ -153,13 +166,13 @@ def upgrade() -> None:
             nullable=False,
         ),
         sa.Column("external_cbs_id", sa.String(512), nullable=True),
-        sa.Column("persona_type", sa.Enum("corporate_professional", "young_it_professional",
+        sa.Column("persona_type", postgresql.ENUM("corporate_professional", "young_it_professional",
             "startup_founder", "doctor", "lawyer", "hni", "affluent_investor",
             "business_owner", "nri_family", "newly_married", "pre_retirement",
             name="personatype", create_type=False), nullable=False),
-        sa.Column("risk_tier", sa.Enum("low", "medium", "high",
+        sa.Column("risk_tier", postgresql.ENUM("low", "medium", "high",
             name="risktier", create_type=False), nullable=False, server_default="low"),
-        sa.Column("kyc_status", sa.Enum("complete", "pending", "expired",
+        sa.Column("kyc_status", postgresql.ENUM("complete", "pending", "expired",
             name="kycstatus", create_type=False), nullable=False, server_default="pending"),
         sa.Column("relationship_tenure_months", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("created_at", sa.DateTime(timezone=True),
@@ -188,9 +201,9 @@ def upgrade() -> None:
         sa.Column("total_liabilities", sa.Numeric(15, 2), nullable=True),
         sa.Column("credit_score", sa.Integer(), nullable=True),
         sa.Column("product_holdings", postgresql.JSONB(), nullable=False,
-            server_default="'{}'"),
+            server_default=sa.text("'{}'")),
         sa.Column("behavioral_tags", postgresql.ARRAY(sa.String()), nullable=False,
-            server_default="'{}'"),
+            server_default=sa.text("'{}'")),
         sa.Column("last_refreshed_at", sa.DateTime(timezone=True), nullable=True),
     )
 
@@ -211,15 +224,16 @@ def upgrade() -> None:
             sa.ForeignKey("customers.id", ondelete="CASCADE"),
             nullable=False,
         ),
-        sa.Column("txn_type", sa.Enum("upi", "card", "neft", "imps", "atm",
+        sa.Column("txn_type", postgresql.ENUM("upi", "card", "neft", "imps", "atm",
             name="transactiontype", create_type=False), nullable=False),
         sa.Column("merchant_category", sa.String(10), nullable=True),
         sa.Column("merchant_name", sa.String(255), nullable=True),
         sa.Column("amount", sa.Numeric(15, 2), nullable=False),
-        sa.Column("direction", sa.Enum("debit", "credit",
+        sa.Column("direction", postgresql.ENUM("debit", "credit",
             name="transactiondirection", create_type=False), nullable=False),
         sa.Column("channel", sa.String(50), nullable=True),
         sa.Column("txn_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("notes", sa.Text(), nullable=True),
     )
     op.create_index("ix_transactions_customer_id", "transactions", ["customer_id"])
     op.create_index("ix_transactions_txn_at", "transactions", ["txn_at"])
@@ -244,12 +258,12 @@ def upgrade() -> None:
             sa.ForeignKey("customers.id", ondelete="CASCADE"),
             nullable=False,
         ),
-        sa.Column("event_type", sa.Enum("wedding", "home_purchase", "foreign_education",
+        sa.Column("event_type", postgresql.ENUM("wedding", "home_purchase", "foreign_education",
             "child_education", "medical", "business_expansion", "promotion",
             "wealth_migration", "retirement_planning",
             name="eventtype", create_type=False), nullable=False),
         sa.Column("confidence_score", sa.Numeric(4, 3), nullable=False),
-        sa.Column("signals", postgresql.JSONB(), nullable=False, server_default="'{}'"),
+        sa.Column("signals", postgresql.JSONB(), nullable=False, server_default=sa.text("'{}'")),
         sa.Column("detected_at", sa.DateTime(timezone=True),
             server_default=sa.text("now()"), nullable=False),
         sa.Column("expires_at", sa.DateTime(timezone=True), nullable=True),
@@ -283,7 +297,7 @@ def upgrade() -> None:
             sa.ForeignKey("detected_events.id", ondelete="SET NULL"),
             nullable=True,
         ),
-        sa.Column("product_recommended", sa.Enum(
+        sa.Column("product_recommended", postgresql.ENUM(
             "personal_loan", "home_loan", "education_loan", "working_capital_loan",
             "loan_against_securities", "wealth_advisory", "forex_card",
             "premium_credit_card", "insurance", "business_credit_card",
@@ -293,9 +307,9 @@ def upgrade() -> None:
         sa.Column("conversion_prob", sa.Numeric(4, 3), nullable=False,
             server_default="0.000"),
         sa.Column("revenue_potential", sa.Numeric(15, 2), nullable=True),
-        sa.Column("risk_flags", postgresql.JSONB(), nullable=False, server_default="'{}'"),
+        sa.Column("risk_flags", postgresql.JSONB(), nullable=False, server_default=sa.text("'{}'")),
         sa.Column("explanation", sa.Text(), nullable=True),
-        sa.Column("status", sa.Enum("new", "rm_viewed", "outreach_sent",
+        sa.Column("status", postgresql.ENUM("new", "rm_viewed", "outreach_sent",
             "converted", "dismissed", name="opportunitystatus", create_type=False),
             nullable=False, server_default="new"),
         sa.Column("created_at", sa.DateTime(timezone=True),
@@ -327,7 +341,7 @@ def upgrade() -> None:
             sa.ForeignKey("opportunities.id", ondelete="CASCADE"),
             nullable=False,
         ),
-        sa.Column("channel", sa.Enum("whatsapp", "sms", "email",
+        sa.Column("channel", postgresql.ENUM("whatsapp", "sms", "email",
             name="outreachchannel", create_type=False), nullable=False),
         sa.Column("message_body", sa.Text(), nullable=False),
         sa.Column("persona_tone", sa.String(50), nullable=True),
@@ -355,8 +369,8 @@ def upgrade() -> None:
         sa.Column("session_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("agent_name", sa.String(100), nullable=True),
         sa.Column("input_masked", postgresql.JSONB(), nullable=False,
-            server_default="'{}'"),
-        sa.Column("output", postgresql.JSONB(), nullable=False, server_default="'{}'"),
+            server_default=sa.text("'{}'")),
+        sa.Column("output", postgresql.JSONB(), nullable=False, server_default=sa.text("'{}'")),
         sa.Column("llm_provider", sa.String(50), nullable=True),
         sa.Column("model_used", sa.String(100), nullable=True),
         sa.Column("tokens_used", sa.Integer(), nullable=True),
@@ -381,14 +395,25 @@ def upgrade() -> None:
     # Created now so the vector extension is exercised and the table is
     # present for backfill_embeddings.py in Phase 6.
     # ------------------------------------------------------------------
-    op.execute("""
+    connection = op.get_bind()
+    result = connection.execute(sa.text("SELECT count(*) FROM pg_available_extensions WHERE name = 'vector'"))
+    has_vector = result.scalar() > 0
+    
+    # Force disable vector extension on local dev ports 5434/5435
+    if "5434" in str(connection.engine.url) or "5435" in str(connection.engine.url):
+        has_vector = False
+        
+    embedding_type = "vector(1536)" if has_vector else "double precision[]"
+
+
+    op.execute(f"""
         CREATE TABLE IF NOT EXISTS knowledge_embeddings (
             id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
             doc_type VARCHAR(50) NOT NULL,
             chunk_text TEXT NOT NULL,
-            metadata JSONB NOT NULL DEFAULT '{}',
+            metadata JSONB NOT NULL DEFAULT '{{}}',
             content_hash VARCHAR(64) NOT NULL,
-            embedding vector(1536),
+            embedding {embedding_type},
             created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
             CONSTRAINT uq_knowledge_embeddings_hash UNIQUE (content_hash)
         )
@@ -397,11 +422,13 @@ def upgrade() -> None:
         "CREATE INDEX IF NOT EXISTS ix_knowledge_embeddings_doc_type "
         "ON knowledge_embeddings (doc_type)"
     )
-    # HNSW index for fast approximate nearest-neighbour search
-    op.execute(
-        "CREATE INDEX IF NOT EXISTS ix_knowledge_embeddings_hnsw "
-        "ON knowledge_embeddings USING hnsw (embedding vector_cosine_ops)"
-    )
+    # HNSW index for fast approximate nearest-neighbour search (only if pgvector is available)
+    if has_vector:
+        op.execute(
+            "CREATE INDEX IF NOT EXISTS ix_knowledge_embeddings_hnsw "
+            "ON knowledge_embeddings USING hnsw (embedding vector_cosine_ops)"
+        )
+
 
 
 def downgrade() -> None:

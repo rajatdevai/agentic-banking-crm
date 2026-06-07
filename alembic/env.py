@@ -88,7 +88,14 @@ async def run_async_migrations() -> None:
     NullPool is used here for the same reason as in session.py — cloud Postgres
     closes idle connections, so we don't pool migration connections.
     """
-    connectable = create_async_engine(DATABASE_URL, poolclass=pool.NullPool)
+    db_url = DATABASE_URL
+    connect_args = {}
+    if "sslmode=" in db_url or "neon.tech" in db_url or "supabase" in db_url:
+        connect_args["ssl"] = True
+        if "?" in db_url:
+            db_url = db_url.split("?", 1)[0]
+
+    connectable = create_async_engine(db_url, poolclass=pool.NullPool, connect_args=connect_args)
     async with connectable.connect() as connection:
         await connection.run_sync(do_run_migrations)
     await connectable.dispose()

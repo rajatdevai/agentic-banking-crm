@@ -64,8 +64,9 @@ class OutreachGenAgent(BaseAgent):
         explanation_summary = (explanation or "Personalised opportunity identified.")[:400]
 
         messages: list[OutreachMessage] = []
+        channels = state.get("requested_channels") or _DEFAULT_CHANNELS
 
-        for channel in _DEFAULT_CHANNELS:
+        for channel in channels:
             prompt_key = {
                 OutreachChannel.WHATSAPP: PromptKey.OUTREACH_WHATSAPP,
                 OutreachChannel.SMS:      PromptKey.OUTREACH_SMS,
@@ -122,6 +123,8 @@ class OutreachGenAgent(BaseAgent):
                 query=f"{persona_type} communication tone banking relationship manager",
                 collection="persona_playbooks",
                 top_k=2,
+                db=self._db,
+                redis_client=self._redis,
             )
             if results:
                 return "\n".join(r.get("content", "")[:300] for r in results)

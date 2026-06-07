@@ -29,28 +29,28 @@
 
 /* Theme variables */
 :root {
-  /* Dark Theme (Default) */
-  --bg-app: #080710;
-  --bg-app-rgb: 8, 7, 16;
-  --bg-panel: rgba(20, 18, 38, 0.45);
-  --bg-panel-solid: #121020;
-  --border-color: rgba(255, 255, 255, 0.08);
-  --border-hover: rgba(255, 255, 255, 0.16);
-  --text-main: #f3f4f6;
-  --text-muted: #9ca3af;
-  --accent-color: #5d5bf4;
-  --accent-glow: rgba(93, 91, 244, 0.25);
-  --accent-hover: #7b79f8;
+  /* Lustrous Obsidian Black & Gold Theme */
+  --bg-app: #000000;
+  --bg-app-rgb: 0, 0, 0;
+  --bg-panel: rgba(10, 10, 12, 0.75);
+  --bg-panel-solid: #050505;
+  --border-color: rgba(212, 175, 55, 0.15); /* Subtle Gold border */
+  --border-hover: rgba(212, 175, 55, 0.35); /* Glowing Gold border on hover */
+  --text-main: #fcfcfd;
+  --text-muted: #8e8e93;
+  --accent-color: #d4af37; /* Lustrous Gold */
+  --accent-glow: rgba(212, 175, 55, 0.2);
+  --accent-hover: #f3cd57;
   
-  --priority-high: #ff4a5a;
-  --priority-high-glow: rgba(255, 74, 90, 0.15);
-  --priority-medium: #ff9f1c;
-  --priority-medium-glow: rgba(255, 159, 28, 0.15);
-  --priority-low: #2ec4b6;
-  --priority-low-glow: rgba(46, 196, 182, 0.15);
+  --priority-high: #ff3b30;
+  --priority-high-glow: rgba(255, 59, 48, 0.12);
+  --priority-medium: #ff9500;
+  --priority-medium-glow: rgba(255, 149, 0, 0.12);
+  --priority-low: #34c759;
+  --priority-low-glow: rgba(52, 199, 89, 0.12);
   
-  --bg-scroll-track: #0f0d1e;
-  --bg-scroll-thumb: #28244c;
+  --bg-scroll-track: #050505;
+  --bg-scroll-thumb: #222222;
   
   --sidebar-width: 260px;
   --header-height: 70px;
@@ -106,16 +106,17 @@ body, html, #root {
 
 /* Grid and Glass Classes */
 .glass-panel {
-  background: var(--bg-panel);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
+  background: linear-gradient(135deg, rgba(12, 12, 14, 0.85) 0%, rgba(3, 3, 4, 0.95) 100%);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
   border: 1px solid var(--border-color);
   border-radius: 16px;
-  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.2);
+  box-shadow: 0 16px 40px 0 rgba(0, 0, 0, 0.85), inset 0 1px 1px 0 rgba(255, 255, 255, 0.05);
 }
 
 .glass-panel:hover {
   border-color: var(--border-hover);
+  box-shadow: 0 16px 40px 0 rgba(0, 0, 0, 0.95), 0 0 16px 0 rgba(212, 175, 55, 0.1), inset 0 1px 1px 0 rgba(255, 255, 255, 0.08);
 }
 
 .gradient-text {

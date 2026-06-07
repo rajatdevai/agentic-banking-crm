@@ -113,16 +113,16 @@ async def _dense_search(
         # Using pgvector cosine distance: 1 - cosine_distance = cosine_similarity
         sql = text(f"""
             SELECT
-                id::text as chunk_id,
+                CAST(id AS text) as chunk_id,
                 doc_type,
                 source_file,
                 chunk_index,
                 chunk_text,
                 content_hash,
-                1 - (embedding::vector(1536) <=> :embedding_str::vector(1536)) as similarity
+                1 - (CAST(embedding AS vector(1536)) <=> CAST(:embedding_str AS vector(1536))) as similarity
             FROM knowledge_embeddings
             WHERE {where_clause}
-                AND 1 - (embedding::vector(1536) <=> :embedding_str::vector(1536)) >= {similarity_threshold}
+                AND 1 - (CAST(embedding AS vector(1536)) <=> CAST(:embedding_str AS vector(1536))) >= {similarity_threshold}
             ORDER BY similarity DESC
             LIMIT :limit
         """)
@@ -169,7 +169,7 @@ async def _sparse_search(
 
         sql = text(f"""
             SELECT
-                id::text as chunk_id,
+                CAST(id AS text) as chunk_id,
                 doc_type,
                 source_file,
                 chunk_index,

@@ -118,6 +118,8 @@
   position: relative;
   overflow: hidden;
   z-index: 1;
+  /* Ensure absolutely-positioned children (chat bubble) are not clipped */
+  isolation: isolate;
 }
 
 /* Sidebar styling */
@@ -250,11 +252,14 @@
 /* Main content workspace */
 .main-content {
   flex-grow: 1;
+  min-width: 0; /* Prevent flex overflow */
   height: 100%;
   display: flex;
   flex-direction: column;
   padding: 24px 32px;
   overflow: hidden;
+  /* Pad bottom so chat bubble doesn't cover content */
+  padding-bottom: 0;
 }
 
 .main-header {
@@ -262,6 +267,7 @@
   justify-content: space-between;
   align-items: center;
   margin-bottom: 24px;
+  flex-shrink: 0; /* Never let the header get squished */
 }
 
 .main-header h1 {
@@ -284,23 +290,28 @@
 .dashboard-content-split {
   display: flex;
   gap: 24px;
-  flex-grow: 1;
+  flex: 1 1 0;
   overflow: hidden;
-  height: calc(100% - var(--header-height));
+  /* Use flex-grow instead of hard-coded calc so digest/filters above are included */
+  min-height: 0;
 }
 
 .queue-panel {
   flex: 5;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 16px;
-  height: 100%;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .detail-panel {
   flex: 7;
+  min-width: 0;
   display: flex;
-  height: 100%;
+  min-height: 0;
+  overflow: hidden;
 }
 
 /* Morning Digest sliding accordion */
@@ -308,6 +319,7 @@
   padding: 16px 20px;
   cursor: pointer;
   user-select: none;
+  flex-shrink: 0; /* Never squish the digest accordion */
 }
 
 .digest-header {
@@ -355,6 +367,7 @@
   justify-content: space-between;
   align-items: center;
   padding: 12px 20px;
+  flex-shrink: 0; /* Never squish the filters bar */
 }
 
 .filter-group {
@@ -470,6 +483,7 @@
 /* Detailed Information Section */
 .detailed-info {
   width: 100%;
+  height: 100%;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
@@ -599,16 +613,16 @@
   font-size: 0.9rem;
 }
 
-/* Floating chat layout */
+/* Floating chat layout — fixed to viewport so it's never clipped */
 .chat-copilot-container {
-  position: absolute;
+  position: fixed;
   bottom: 24px;
   right: 24px;
   width: 360px;
   display: flex;
   flex-direction: column;
-  z-index: 100;
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
+  z-index: 1000;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
   transition: all 0.3s ease-in-out;
 }
 
@@ -618,6 +632,7 @@
 
 .chat-copilot-container.open {
   height: 520px;
+  max-height: calc(100vh - 48px);
 }
 
 .chat-header {
@@ -691,6 +706,12 @@
   overflow-x: auto;
   border-top: 1px solid var(--border-color);
   background: rgba(0, 0, 0, 0.1);
+  scrollbar-width: none; /* Firefox */
+  -ms-overflow-style: none; /* IE/Edge */
+}
+
+.quick-prompts::-webkit-scrollbar {
+  display: none; /* Chrome, Safari, Opera */
 }
 
 .quick-prompts button {

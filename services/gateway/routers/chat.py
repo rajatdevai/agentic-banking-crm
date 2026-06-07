@@ -105,19 +105,29 @@ async def copilot_chat(
             # Instantiate agent
             agent = RMCopilotAgent(db=db, redis=redis)
 
-            # Retrieve context with citations in parallel across collections
+            # Retrieve context with citations — all 4 collections fetched IN PARALLEL
             citations = []
             rag_context_parts = []
             collections = ["product_catalog", "policy_docs", "persona_playbooks", "market_context"]
 
-            for col in collections:
-                context_res = await search_knowledge_base(
-                    query=body.message,
-                    db=db,
-                    doc_type_filter=col,
-                    redis_client=redis,
-                    top_k=2
-                )
+            rag_results = await asyncio.gather(
+                *[
+                    search_knowledge_base(
+                        query=body.message,
+                        db=db,
+                        doc_type_filter=col,
+                        redis_client=redis,
+                        top_k=2,
+                    )
+                    for col in collections
+                ],
+                return_exceptions=True,
+            )
+
+            for col, context_res in zip(collections, rag_results):
+                if isinstance(context_res, Exception):
+                    logger.warning("rag_collection_error", collection=col, error=str(context_res))
+                    continue
                 if context_res.formatted_context and context_res.formatted_context != "No relevant context found in the knowledge base.":
                     rag_context_parts.append(f"[{col.upper()}]\n{context_res.formatted_context}")
                     for cit in context_res.source_citations:
@@ -125,7 +135,7 @@ async def copilot_chat(
                             "source": cit.get("source_file", ""),
                             "doc_type": cit.get("doc_type", ""),
                             "excerpt": cit.get("excerpt", "")[:250],
-                            "score": cit.get("rrf_score", 0.0)
+                            "score": cit.get("rrf_score", 0.0),
                         })
 
             rag_context = "\n\n".join(rag_context_parts) or "No relevant context found in knowledge base."

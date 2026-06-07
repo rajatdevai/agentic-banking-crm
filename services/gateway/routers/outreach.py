@@ -28,6 +28,8 @@ from services.gateway.schemas.outreach import (
     OutreachGenerateRequest,
     OutreachPreviewResponse,
     OutreachStatusResponse,
+    OutreachCampaignItem,
+    OutreachCampaignsListResponse,
 )
 from shared.constants.enums import OpportunityStatus, OutreachChannel
 from shared.db.models import Customer, Opportunity, OutreachCampaign, RelationshipManager
@@ -119,9 +121,26 @@ async def generate_outreach(
         last_refreshed_at=customer_profile_orm.last_refreshed_at if customer_profile_orm else None,
     )
 
+    resolved_event_type = None
+    if opportunity.event:
+        resolved_event_type = opportunity.event.event_type
+    else:
+        from shared.db.models import DetectedEvent
+        ev_res = await db.execute(
+            select(DetectedEvent)
+            .where(DetectedEvent.customer_id == customer.id)
+            .order_by(DetectedEvent.detected_at.desc())
+            .limit(1)
+        )
+        latest_event = ev_res.scalar_one_or_none()
+        if latest_event:
+            resolved_event_type = latest_event.event_type
+        else:
+            resolved_event_type = EventType.MEDICAL
+
     opp_state = StateOpportunity(
         customer_id=str(opportunity.customer_id),
-        event_type=opportunity.event.event_type if opportunity.event else EventType.TRANSACTION_ALERT,
+        event_type=resolved_event_type,
         product_recommended=opportunity.product_recommended,
         priority_score=float(opportunity.priority_score),
         conversion_probability=float(opportunity.conversion_prob),
@@ -137,7 +156,9 @@ async def generate_outreach(
 
     state = {
         "customer_id": str(customer.id),
+        "customer_name": customer.name or "Valued Customer",
         "rm_id": str(customer.rm_id),
+        "rm_name": current_rm.name,
         "session_id": session_id,
         "trace_id": trace_id,
         "customer_profile": profile_state,
@@ -161,11 +182,15 @@ async def generate_outreach(
         )
 
     generated_message = messages[0].message_body
+    option_a = messages[0].option_a
+    option_b = messages[0].option_b
 
     campaign = OutreachCampaign(
         opportunity_id=opportunity.id,
         channel=body.channel,
         message_body=generated_message,
+        message_option_a=option_a,
+        message_option_b=option_b,
         persona_tone=customer.persona_type.value,
         session_id=session_id,
     )
@@ -187,6 +212,8 @@ async def generate_outreach(
         opportunity_id=body.opportunity_id,
         channel=body.channel,
         message_body=generated_message,
+        message_option_a=option_a,
+        message_option_b=option_b,
         persona_tone=customer.persona_type.value,
         generated_at=datetime.now(timezone.utc),
     )
@@ -321,3 +348,91 @@ async def get_outreach_status(
         converted_at=campaign.converted_at,
         provider_message_id=campaign.provider_message_id,
     )
+
+
+# ---------------------------------------------------------------------------
+# GET /outreach
+# ---------------------------------------------------------------------------
+@router.get(
+    "",
+    response_model=OutreachCampaignsListResponse,
+    summary="Get all outreach campaigns (catered portfolio) owned by this RM",
+)
+async def list_outreach_campaigns(
+    current_rm: RelationshipManager = Depends(get_current_rm),
+    db: AsyncSession = Depends(get_db),
+):
+    import json
+    import redis.asyncio as aioredis
+    from shared.config.settings import get_settings
+
+    settings = get_settings()
+    redis_client = None
+    CACHE_KEY = f"outreach:list:{current_rm.id}"
+    CACHE_TTL = 30  # seconds — short enough to reflect new dispatches quickly
+
+    # Try cache first
+    try:
+        redis_client = await aioredis.from_url(settings.REDIS_URL, decode_responses=True)
+        cached = await redis_client.get(CACHE_KEY)
+        if cached:
+            data = json.loads(cached)
+            return OutreachCampaignsListResponse(
+                campaigns=[OutreachCampaignItem(**c) for c in data]
+            )
+    except Exception:
+        pass  # Cache miss — fall through to DB
+
+    result = await db.execute(
+        select(OutreachCampaign, Opportunity, Customer)
+        .join(Opportunity, OutreachCampaign.opportunity_id == Opportunity.id)
+        .join(Customer, Opportunity.customer_id == Customer.id)
+        .where(
+            Customer.rm_id == current_rm.id,
+            Customer.deleted_at.is_(None),
+        )
+        .order_by(OutreachCampaign.sent_at.desc(), OutreachCampaign.id.desc())
+    )
+    rows = result.all()
+
+    campaigns = []
+    for campaign, opportunity, customer in rows:
+        if campaign.converted_at:
+            delivery_status = "converted"
+        elif campaign.opened_at:
+            delivery_status = "opened"
+        elif campaign.delivered_at:
+            delivery_status = "delivered"
+        elif campaign.sent_at:
+            delivery_status = "sent"
+        else:
+            delivery_status = "pending"
+
+        campaigns.append(
+            OutreachCampaignItem(
+                campaign_id=campaign.id,
+                customer_id=customer.id,
+                customer_name=customer.name or "Anonymous",
+                opportunity_id=opportunity.id,
+                product_recommended=opportunity.product_recommended.value,
+                channel=campaign.channel,
+                message_body=campaign.message_body,
+                status=delivery_status,
+                sent_at=campaign.sent_at,
+                delivered_at=campaign.delivered_at,
+                opened_at=campaign.opened_at,
+                converted_at=campaign.converted_at,
+            )
+        )
+
+    # Write to cache
+    try:
+        if redis_client:
+            payload = [c.model_dump(mode="json") for c in campaigns]
+            await redis_client.setex(CACHE_KEY, CACHE_TTL, json.dumps(payload, default=str))
+            await redis_client.aclose()
+    except Exception:
+        pass
+
+    return OutreachCampaignsListResponse(campaigns=campaigns)
+

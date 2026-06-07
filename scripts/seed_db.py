@@ -47,8 +47,8 @@ async def main():
 
         # 1. Create RMs
         print("Creating Relationship Managers...")
-        priya_id = uuid.uuid4()
-        arjun_id = uuid.uuid4()
+        priya_id = uuid.UUID("501d3fe0-0088-4f4a-a423-24c2a223ae3c")
+        arjun_id = uuid.UUID("2f339768-8cae-4595-a8d8-d67175b7469c")
         hashed_pwd = hash_password("password123")
 
         priya = RelationshipManager(

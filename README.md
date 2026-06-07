@@ -1,6 +1,6 @@
 # RM Copilot — Enterprise Banking Intelligence Platform
 
-An AI-powered Relationship Manager Copilot that analyzes customer transaction data, detects life events, scores customers by conversion probability, recommends banking products, and generates personalized outreach messages.
+An AI-powered Relationship Manager Copilot that analyzes customer transaction data, detects life events, scores customers by conversion probability, recommends banking products, and generates personalized outreach messages — delivered via WhatsApp (Twilio), SMS, and Email with full delivery tracking.
 
 ---
 
@@ -110,7 +110,7 @@ The primary use case: *"Find high-value customers likely to convert for a person
 | Opportunity Scoring | ❌ | XGBoost conversion_prob + composite priority score |
 | Product Recommendation | ❌+RAG | RAG eligibility lookup + rule-based validation |
 | Explainability | ✅ gpt-4o | Plain-English reasoning cards for RM dashboard |
-| Outreach Generation | ✅ gpt-4o | Persona-aware message drafting via RAG + LLM |
+| Outreach Generation | ✅ gpt-4o | Personalized message drafting (customer name, RM name, context) via RAG + LLM |
 | RM Copilot | ✅ gpt-4o | Conversational Q&A, streaming, session memory |
 
 **Key design principle**: LLMs are used *only* for natural language generation tasks. All scoring, classification, and rule enforcement is deterministic — fully auditable and reproducible.
@@ -165,6 +165,8 @@ The conversion probability model uses XGBoost trained on historical campaign out
 ### 3. PII Never Touches LLM APIs
 All customer data is masked by Presidio before any LLM call. Names become `[PERSON_1]`, phone numbers become `[PHONE_1]`, etc. The token-to-PII mapping lives in Redis with a session-scoped TTL. LLM output is de-masked before returning to the RM. This is non-negotiable for banking regulatory compliance.
 
+> **Note**: Outreach messages are generated with customer and RM names injected directly into the prompt context (not PII-masked), since personalized greetings ("Dear Neha Gupta") are a core business requirement for outreach communications.
+
 ### 4. RM Approval Is Always Required
 The outreach generation pipeline produces *previews*, not sent messages. The RM must explicitly approve each message before dispatch. This ensures the RM owns the customer relationship and every communication.
 
@@ -187,7 +189,8 @@ No agent calls another agent directly. All agents read from and write to a share
 **Known limitations for the demo build**:
 - XGBoost model is trained on synthetic data (no real historical conversions)
 - CBS integration is mocked — real integration requires bank API credentials
-- WhatsApp Business API requires Meta approval for the phone number
+- WhatsApp uses Twilio Sandbox for demo (see setup instructions below); production requires Meta-approved number
+- SMS requires verified recipient numbers on Twilio trial accounts
 - No real-time WebSocket push implemented (SSE only for copilot streaming)
 
 ---
@@ -255,8 +258,13 @@ poetry run uvicorn services.gateway.main:app --reload --port 8000
 
 ### 8. Start Celery workers (separate terminal)
 ```bash
-poetry run celery -A services.workers.celery_app worker --loglevel=info
+# Linux / macOS:
+poetry run celery -A services.workers.celery_app worker --loglevel=info -Q outreach,scoring,events,embeddings
+
+# Windows (must use solo pool — prefork is not supported):
+poetry run celery -A services.workers.celery_app worker --loglevel=info -Q outreach,scoring,events,embeddings --pool=solo
 ```
+> **Important**: The Celery worker must be running for outreach dispatch (WhatsApp/SMS/Email) to work. Without it, approved messages will stay in "pending" status indefinitely.
 
 ### 9. Start frontend dashboard (separate terminal)
 ```bash
@@ -266,8 +274,22 @@ npm run dev
 ```
 Open http://localhost:5173 in your browser.
 Log in with demo relationship manager credentials:
-- Email: `priya@bank.com`
-- Password: `password123`
+- **RM 1**: Email: `arjun@bank.com` / Password: `password123`
+- **RM 2**: Email: `priya@bank.com` / Password: `password123`
+
+### 10. WhatsApp Sandbox Setup (Twilio)
+To receive dispatched WhatsApp messages on your phone during demo:
+
+1. Go to [Twilio Console → Messaging → Try it out → Send a WhatsApp message](https://console.twilio.com/us1/develop/sms/try-it-out/whatsapp-learn)
+2. Note your sandbox code (e.g., `join fix-community`)
+3. From your phone, send that message to **+1 415 523 8886** on WhatsApp
+4. Once joined, update `.env` with your Twilio credentials:
+   ```
+   TWILIO_ACCOUNT_SID=your_account_sid
+   TWILIO_AUTH_TOKEN=your_auth_token
+   ```
+5. Ensure your phone number is set in the customers table (all demo customers default to a sandbox-verified number)
+6. Generate and approve an outreach → message arrives on your WhatsApp within seconds
 
 ### API Documentation
 After starting the gateway, visit:

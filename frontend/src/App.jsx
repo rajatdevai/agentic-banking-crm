@@ -3,7 +3,8 @@ import {
   LogIn, Sun, Moon, LogOut, Shield, ChevronDown, ChevronUp, Send, 
   CheckCircle2, User, Landmark, AlertCircle, 
   MessageSquare, Loader2, Sparkles, SendHorizontal, X, 
-  BarChart3, HelpCircle, Users, Check, RefreshCw
+  BarChart3, HelpCircle, Users, Check, RefreshCw, Maximize2, Minimize2,
+  Copy, Edit, Mail, Calendar, Search, ExternalLink, CheckSquare
 } from 'lucide-react';
 import { 
   AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, 
@@ -20,6 +21,73 @@ const oppsCache    = new Map();   // customer_id → OpportunityListResponse.opp
 function clearCaches() {
   profileCache.clear();
   oppsCache.clear();
+}
+
+function parseInlineMarkdown(text) {
+  if (!text) return '';
+  const parts = text.split('**');
+  return parts.map((part, i) => {
+    if (i % 2 === 1) {
+      return <strong key={i} className="font-bold text-accent-light">{part}</strong>;
+    }
+    return part;
+  });
+}
+
+function renderMarkdown(text) {
+  if (!text) return null;
+  const lines = text.split('\n');
+  const renderedElements = [];
+  
+  lines.forEach((line, index) => {
+    let trimmed = line.trim();
+    if (trimmed.startsWith('### ')) {
+      renderedElements.push(
+        <h4 key={index} className="chat-heading font-semibold text-accent mt-3 mb-1.5">
+          {trimmed.slice(4)}
+        </h4>
+      );
+      return;
+    }
+    if (trimmed.startsWith('> ')) {
+      renderedElements.push(
+        <blockquote key={index} className="chat-blockquote pl-4 italic text-muted my-1.5">
+          {parseInlineMarkdown(trimmed.slice(2))}
+        </blockquote>
+      );
+      return;
+    }
+    if (trimmed.startsWith('- ') || trimmed.startsWith('* ')) {
+      renderedElements.push(
+        <div key={index} className="chat-list-item flex items-start gap-2 my-1 pl-2">
+          <span className="text-accent">•</span>
+          <span>{parseInlineMarkdown(trimmed.slice(2))}</span>
+        </div>
+      );
+      return;
+    }
+    const numberedMatch = trimmed.match(/^(\d+)\.\s+(.*)$/);
+    if (numberedMatch) {
+      renderedElements.push(
+        <div key={index} className="chat-list-item-num flex items-start gap-2 my-1.5">
+          <span className="text-accent font-semibold">{numberedMatch[1]}.</span>
+          <span>{parseInlineMarkdown(numberedMatch[2])}</span>
+        </div>
+      );
+      return;
+    }
+    if (trimmed === '') {
+      renderedElements.push(<div key={index} className="h-1.5" />);
+      return;
+    }
+    renderedElements.push(
+      <p key={index} className="my-1 leading-relaxed text-sm">
+        {parseInlineMarkdown(line)}
+      </p>
+    );
+  });
+  
+  return renderedElements;
 }
 
 export default function App() {
@@ -43,6 +111,13 @@ export default function App() {
 
   // App view
   const [view, setView] = useState('queue');
+
+  // Catered Portfolio states
+  const [cateredCampaigns,    setCateredCampaigns]    = useState([]);
+  const [cateredLoading,      setCateredLoading]      = useState(false);
+  const [cateredSearch,       setCateredSearch]       = useState('');
+  const [cateredStatusFilter, setCateredStatusFilter] = useState('all');
+  const [selectedCampaign,    setSelectedCampaign]    = useState(null);
 
   // Customer queue
   const [customers,    setCustomers]    = useState([]);
@@ -77,6 +152,10 @@ export default function App() {
   const [outreachLoading,     setOutreachLoading]     = useState(false);
   const [outreachCampaignId,  setOutreachCampaignId]  = useState(null);
   const [outreachSuccess,     setOutreachSuccess]     = useState(false);
+  const [outreachOptionA,     setOutreachOptionA]     = useState('');
+  const [outreachOptionB,     setOutreachOptionB]     = useState('');
+  const [outreachTone,        setOutreachTone]        = useState('option_a');
+  const [chatEnlarged,        setChatEnlarged]        = useState(false);
 
   // Chat copilot
   const [chatOpen,     setChatOpen]     = useState(true);
@@ -94,6 +173,7 @@ export default function App() {
   // ── Critical fix: use a ref to accumulate SSE tokens (avoids stale closure)
   const streamAccumRef  = useRef('');
   const citationsRef    = useRef([]);
+  const agentTraceRef   = useRef([]);
   const abortCtrlRef    = useRef(null);
 
   const [chatSessionId]  = useState(() => crypto.randomUUID());
@@ -105,6 +185,70 @@ export default function App() {
 
   // Scan trigger
   const [scanning, setScanning] = useState(false);
+
+  // Edit response in chat panel
+  const [editingIndex, setEditingIndex] = useState(null);
+  const [editingText, setEditingText] = useState('');
+
+  const handleCopyMessage = useCallback((text) => {
+    navigator.clipboard.writeText(text);
+  }, []);
+
+  const handleStartEdit = useCallback((index, text) => {
+    setEditingIndex(index);
+    setEditingText(text);
+  }, []);
+
+  const handleSaveEdit = useCallback((index) => {
+    setChatMessages(prev => {
+      const next = [...prev];
+      next[index] = { ...next[index], text: editingText };
+      return next;
+    });
+    setEditingIndex(null);
+    setEditingText('');
+  }, [editingText]);
+
+  const handleCancelEdit = useCallback(() => {
+    setEditingIndex(null);
+    setEditingText('');
+  }, []);
+
+  // Chat message persistence per RM
+  useEffect(() => {
+    if (currentRM?.email) {
+      const stored = localStorage.getItem(`chatMessages_${currentRM.email}`);
+      if (stored) {
+        try {
+          setChatMessages(JSON.parse(stored));
+        } catch (e) {
+          console.error("Failed to parse stored chat messages", e);
+        }
+      } else {
+        setChatMessages([
+          {
+            sender: 'copilot',
+            text: "Hello! I'm your RM Copilot. I can search product catalogues, policy playbooks, or summarize your portfolio. Ask me anything!",
+            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+          }
+        ]);
+      }
+    } else {
+      setChatMessages([
+        {
+          sender: 'copilot',
+          text: "Hello! I'm your RM Copilot. I can search product catalogues, policy playbooks, or summarize your portfolio. Ask me anything!",
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        }
+      ]);
+    }
+  }, [currentRM?.email]);
+
+  useEffect(() => {
+    if (currentRM?.email && chatMessages.length > 0) {
+      localStorage.setItem(`chatMessages_${currentRM.email}`, JSON.stringify(chatMessages));
+    }
+  }, [chatMessages, currentRM?.email]);
 
   // ---------------------------------------------------------------------------
   // Auth helpers
@@ -260,6 +404,103 @@ export default function App() {
   }, [token, handleLogout]);
 
   // ---------------------------------------------------------------------------
+  // Fetch catered campaigns (catered portfolio) — with in-memory cache
+  // ---------------------------------------------------------------------------
+  const cateredLoadedRef = useRef(false);
+
+  const fetchCateredCampaigns = useCallback(async (forceRefresh = false) => {
+    if (!token) return;
+
+    // Skip API call if we already have data and it's not a force refresh
+    if (!forceRefresh && cateredLoadedRef.current && cateredCampaigns.length > 0) {
+      return;
+    }
+
+    setCateredLoading(true);
+    try {
+      const res = await fetch('/api/outreach', {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (res.status === 401) { handleLogout(); return; }
+      if (!res.ok) throw new Error('Failed to fetch catered portfolio');
+      const data = await res.json();
+      const campaignsList = data.campaigns || [];
+      setCateredCampaigns(campaignsList);
+      cateredLoadedRef.current = true;
+      if (campaignsList.length > 0 && (forceRefresh || !selectedCampaign)) {
+        setSelectedCampaign(campaignsList[0]);
+      }
+    } catch (err) {
+      console.error('Failed to fetch catered campaigns:', err);
+    } finally {
+      setCateredLoading(false);
+    }
+  }, [token, handleLogout, selectedCampaign, cateredCampaigns.length]);
+
+  useEffect(() => {
+    if (view === 'catered' && !cateredLoadedRef.current) {
+      fetchCateredCampaigns();
+    }
+  }, [view, fetchCateredCampaigns]);
+
+  const handleViewProfileFromCampaign = useCallback((campaign) => {
+    const cust = customers.find(c => c.customer_id === campaign.customer_id);
+    if (cust) {
+      setView('queue');
+      loadCustomerDetails(cust);
+    } else {
+      console.warn("Customer not found in queue list:", campaign.customer_id);
+    }
+  }, [customers, loadCustomerDetails]);
+
+  const handleReEngageFromCampaign = useCallback((campaign) => {
+    const cust = customers.find(c => c.customer_id === campaign.customer_id);
+    if (cust) {
+      setView('queue');
+      loadCustomerDetails(cust);
+      setChatOpen(true);
+      setChatInput(`I want to follow up with ${cust.name || 'this customer'} regarding their recommended ${campaign.product_recommended}. Let's generate a personalized follow-up message.`);
+    }
+  }, [customers, loadCustomerDetails]);
+
+  const isFunnelStepActive = useCallback((campaign, step) => {
+    if (!campaign) return false;
+    if (step === 'created') return true;
+    if (step === 'sent') return !!campaign.sent_at;
+    if (step === 'delivered') return !!campaign.delivered_at;
+    if (step === 'opened') return !!campaign.opened_at;
+    if (step === 'converted') return !!campaign.converted_at;
+    return false;
+  }, []);
+
+  const getFunnelStepDate = useCallback((campaign, step) => {
+    if (!campaign) return null;
+    let val = null;
+    if (step === 'created') val = campaign.sent_at || new Date().toISOString(); // fallback
+    else if (step === 'sent') val = campaign.sent_at;
+    else if (step === 'delivered') val = campaign.delivered_at;
+    else if (step === 'opened') val = campaign.opened_at;
+    else if (step === 'converted') val = campaign.converted_at;
+    
+    if (!val) return null;
+    return new Date(val).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  }, []);
+
+  const filteredCampaigns = useMemo(() => {
+    return cateredCampaigns.filter(c => {
+      const matchesSearch = 
+        c.customer_name.toLowerCase().includes(cateredSearch.toLowerCase()) ||
+        c.product_recommended.toLowerCase().includes(cateredSearch.toLowerCase());
+      
+      const matchesStatus = 
+        cateredStatusFilter === 'all' || 
+        c.status.toLowerCase() === cateredStatusFilter.toLowerCase();
+      
+      return matchesSearch && matchesStatus;
+    });
+  }, [cateredCampaigns, cateredSearch, cateredStatusFilter]);
+
+  // ---------------------------------------------------------------------------
   // Dismiss opportunity
   // ---------------------------------------------------------------------------
   const handleDismissOpportunity = useCallback(async (oppId) => {
@@ -324,6 +565,7 @@ export default function App() {
     setOutreachLoading(true);
     setOutreachSuccess(false);
     setOutreachChannel(channel);
+    setOutreachTone('option_a');
     setShowOutreachModal(true);
     try {
       const res = await fetch('/api/outreach/generate', {
@@ -336,14 +578,38 @@ export default function App() {
         })
       });
       const data = await res.json();
-      setOutreachText(data.message_body);
+      const optA = data.message_option_a || data.message_body || '';
+      const optB = data.message_option_b || data.message_body || '';
+      setOutreachOptionA(optA);
+      setOutreachOptionB(optB);
+      setOutreachText(optA);
       setOutreachCampaignId(data.campaign_id);
     } catch {
       setOutreachText('Failed to generate draft. Please verify LLM connectivity.');
+      setOutreachOptionA('');
+      setOutreachOptionB('');
     } finally {
       setOutreachLoading(false);
     }
   }, [selectedCustomer, token]);
+
+  const handleToneChange = useCallback((tone) => {
+    setOutreachTone(tone);
+    if (tone === 'option_a') {
+      setOutreachText(outreachOptionA);
+    } else {
+      setOutreachText(outreachOptionB);
+    }
+  }, [outreachOptionA, outreachOptionB]);
+
+  const handleTextChange = useCallback((text) => {
+    setOutreachText(text);
+    if (outreachTone === 'option_a') {
+      setOutreachOptionA(text);
+    } else {
+      setOutreachOptionB(text);
+    }
+  }, [outreachTone, outreachOptionA, outreachOptionB]);
 
   const handleApproveOutreach = useCallback(async () => {
     if (!outreachCampaignId) return;
@@ -356,7 +622,8 @@ export default function App() {
       });
       if (res.ok) {
         setOutreachSuccess(true);
-        setTimeout(() => { setShowOutreachModal(false); setOutreachSuccess(false); }, 1500);
+        cateredLoadedRef.current = false; // invalidate cache so Catered Portfolio refreshes
+        setTimeout(() => { setShowOutreachModal(false); setOutreachSuccess(false); }, 400);
       }
     } catch (err) { console.error(err); }
     finally { setOutreachLoading(false); }
@@ -434,6 +701,7 @@ export default function App() {
             }
             if (payload.done) {
               if (payload.citations?.length) citationsRef.current = payload.citations;
+              if (payload.agent_trace?.length) agentTraceRef.current = payload.agent_trace;
               isDone = true;
               break;
             }
@@ -454,15 +722,18 @@ export default function App() {
     } finally {
       const finalText = streamAccumRef.current || 'No response received.';
       const citations = citationsRef.current;
+      const agentTrace = agentTraceRef.current;
       setChatMessages(prev => [...prev, {
         sender: 'copilot',
         text: finalText,
         citations,
+        agentTrace,
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
       }]);
       setStreamingText('');
       streamAccumRef.current = '';
       citationsRef.current   = [];
+      agentTraceRef.current  = [];
       setChatStreaming(false);
       abortCtrlRef.current   = null;
     }
@@ -474,7 +745,6 @@ export default function App() {
   const triggerSystemScan = useCallback(async () => {
     setScanning(true);
     try {
-      await new Promise(r => setTimeout(r, 1500));
       // Bust queue cache by clearing customer section
       await fetchQueue();
     } catch (e) { console.error(e); }
@@ -600,6 +870,9 @@ export default function App() {
           <button className={`nav-item ${view === 'queue' ? 'active' : ''}`} onClick={() => setView('queue')}>
             <Users size={18} /><span>Priority Queue</span>
           </button>
+          <button className={`nav-item ${view === 'catered' ? 'active' : ''}`} onClick={() => setView('catered')}>
+            <CheckSquare size={18} /><span>Catered Portfolio</span>
+          </button>
           <button className={`nav-item ${view === 'analytics' ? 'active' : ''}`} onClick={() => setView('analytics')}>
             <BarChart3 size={18} /><span>Analytics Hub</span>
           </button>
@@ -631,14 +904,32 @@ export default function App() {
       <main className="main-content">
         <header className="main-header">
           <div className="header-title">
-            <h1>Priority Dashboard</h1>
-            <p className="text-muted">Analyze, score and outreach customers based on life events.</p>
+            {view === 'queue' && (
+              <>
+                <h1>Priority Dashboard</h1>
+                <p className="text-muted">Analyze, score and outreach customers based on life events.</p>
+              </>
+            )}
+            {view === 'catered' && (
+              <>
+                <h1>Catered Portfolio</h1>
+                <p className="text-muted">Track delivery and conversion metrics for client outreach.</p>
+              </>
+            )}
+            {view === 'analytics' && (
+              <>
+                <h1>Analytics Hub</h1>
+                <p className="text-muted">Portfolio performance and opportunity tracking.</p>
+              </>
+            )}
           </div>
           <div className="header-actions">
-            <button className="btn-secondary flex items-center gap-2" onClick={triggerSystemScan} disabled={scanning}>
-              <RefreshCw className={scanning ? 'animate-spin' : ''} size={16} />
-              <span>{scanning ? 'Scanning...' : 'Trigger Scan'}</span>
-            </button>
+            {view === 'queue' && (
+              <button className="btn-secondary flex items-center gap-2" onClick={triggerSystemScan} disabled={scanning}>
+                <RefreshCw className={scanning ? 'animate-spin' : ''} size={16} />
+                <span>{scanning ? 'Scanning...' : 'Trigger Scan'}</span>
+              </button>
+            )}
           </div>
         </header>
 
@@ -761,7 +1052,7 @@ export default function App() {
             {/* Right — Detail Panel */}
             <div className="detail-panel">
               {selectedCustomer ? (
-                <div className="detailed-info scrollable">
+                <div className="detailed-info scrollable" style={{ paddingBottom: '80px' }}>
                   <div className="info-header glass-panel">
                     {detailLoading ? (
                       <div className="loading-spinner">
@@ -849,6 +1140,167 @@ export default function App() {
               )}
             </div>
           </div>
+        ) : view === 'catered' ? (
+          <div className="catered-container slide-in-anim">
+            {/* Left Panel - Campaigns List */}
+            <div className="catered-list-panel glass-panel">
+              <div className="panel-header-catered">
+                <h3>Catered Portfolio</h3>
+                <p className="text-muted text-sm">Review campaigns sent to your clients.</p>
+              </div>
+
+              {/* Search */}
+              <div className="search-box-container">
+                <Search size={16} className="search-icon" />
+                <input 
+                  type="text" 
+                  placeholder="Search by client or product..." 
+                  value={cateredSearch}
+                  onChange={(e) => setCateredSearch(e.target.value)}
+                  className="search-input-catered"
+                />
+              </div>
+
+              {/* Status Filters */}
+              <div className="status-filter-pills">
+                {['all', 'pending', 'sent', 'delivered', 'opened', 'converted'].map(status => {
+                  const count = cateredCampaigns.filter(c => status === 'all' || c.status.toLowerCase() === status).length;
+                  return (
+                    <button 
+                      key={status}
+                      className={`status-pill ${cateredStatusFilter === status ? 'active' : ''}`}
+                      onClick={() => setCateredStatusFilter(status)}
+                    >
+                      <span className="capitalize">{status}</span>
+                      <span className="pill-count">{count}</span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* List */}
+              <div className="campaigns-scroll-list">
+                {cateredLoading ? (
+                  <div className="loading-state">
+                    <Loader2 className="animate-spin text-accent" size={24} />
+                    <p>Loading catered campaigns...</p>
+                  </div>
+                ) : filteredCampaigns.length === 0 ? (
+                  <div className="empty-state">
+                    <AlertCircle size={32} className="text-muted" />
+                    <p>No campaigns found.</p>
+                  </div>
+                ) : (
+                  filteredCampaigns.map(c => {
+                    const isSelected = selectedCampaign?.campaign_id === c.campaign_id;
+                    return (
+                      <div 
+                        key={c.campaign_id} 
+                        className={`campaign-card ${isSelected ? 'selected' : ''}`}
+                        onClick={() => setSelectedCampaign(c)}
+                      >
+                        <div className="campaign-card-header">
+                          <span className="customer-name">{c.customer_name}</span>
+                          <span className={`status-badge badge-${c.status.toLowerCase()}`}>
+                            {c.status}
+                          </span>
+                        </div>
+                        <div className="campaign-card-details">
+                          <span className="product-name">{c.product_recommended}</span>
+                          <span className="channel-badge text-xs">{c.channel}</span>
+                        </div>
+                        <div className="campaign-card-footer">
+                          <span className="time-ago">
+                            {c.sent_at ? new Date(c.sent_at).toLocaleDateString() : 'Draft'}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+
+            {/* Right Panel - Campaign Detail */}
+            <div className="catered-detail-panel glass-panel">
+              {selectedCampaign ? (
+                <div className="campaign-detail-content">
+                  <div className="detail-header">
+                    <div>
+                      <h2>{selectedCampaign.customer_name}</h2>
+                      <p className="detail-subtitle">
+                        Recommended: <strong className="text-accent">{selectedCampaign.product_recommended}</strong> 
+                        &nbsp;&bull;&nbsp; Channel: <span className="channel-badge capitalize">{selectedCampaign.channel}</span>
+                      </p>
+                    </div>
+                    <div className="detail-header-actions">
+                      <button 
+                        className="btn-secondary flex items-center gap-1"
+                        onClick={() => handleViewProfileFromCampaign(selectedCampaign)}
+                      >
+                        <ExternalLink size={14} />
+                        <span>View Profile</span>
+                      </button>
+                      <button 
+                        className="btn-accent flex items-center gap-1"
+                        onClick={() => handleReEngageFromCampaign(selectedCampaign)}
+                      >
+                        <MessageSquare size={14} />
+                        <span>Re-engage</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Delivery Funnel Progress Timeline */}
+                  <div className="funnel-container">
+                    <h4>Delivery Funnel</h4>
+                    <div className="funnel-timeline">
+                      {['created', 'sent', 'delivered', 'opened', 'converted'].map((step, idx) => {
+                        const stepActive = isFunnelStepActive(selectedCampaign, step);
+                        const stepDate = getFunnelStepDate(selectedCampaign, step);
+                        return (
+                          <div key={step} className={`funnel-step ${stepActive ? 'active' : ''}`}>
+                            <div className="step-marker">
+                              {stepActive ? <Check size={12} /> : <span>{idx + 1}</span>}
+                            </div>
+                            <div className="step-info">
+                              <span className="step-label capitalize">{step}</span>
+                              {stepDate && <span className="step-date">{stepDate}</span>}
+                            </div>
+                            {idx < 4 && <div className="step-line" />}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Message Body Display */}
+                  <div className="message-preview-container">
+                    <div className="message-preview-header">
+                      <h4>Dispatched Message</h4>
+                      <button 
+                        className="btn-copy" 
+                        onClick={() => handleCopyMessage(selectedCampaign.message_body)}
+                        title="Copy to clipboard"
+                      >
+                        <Copy size={16} />
+                        <span>Copy</span>
+                      </button>
+                    </div>
+                    <div className="message-preview-body">
+                      {selectedCampaign.message_body}
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="no-selection">
+                  <Mail size={48} className="text-muted float-anim" />
+                  <h3>Select a Campaign</h3>
+                  <p>Choose a catered customer's campaign from the left list to view delivery logs, dispatched message content, and funnel events.</p>
+                </div>
+              )}
+            </div>
+          </div>
         ) : (
           /* Analytics Hub */
           <div className="analytics-hub scrollable slide-in-anim">
@@ -918,17 +1370,38 @@ export default function App() {
         )}
       </main>
 
+      {/* Backdrop overlay for enlarged chat modal */}
+      {chatOpen && chatEnlarged && (
+        <div className="modal-overlay chat-overlay" onClick={() => setChatEnlarged(false)} style={{ zIndex: 998 }} />
+      )}
+
       {/* Floating Chat Copilot */}
-      <div className={`chat-copilot-container glass-panel ${chatOpen ? 'open' : 'closed'}`}>
-        <div className="chat-header" onClick={() => setChatOpen(prev => !prev)}>
-          <div className="flex items-center gap-2">
+      <div 
+        className={`chat-copilot-container glass-panel ${chatOpen ? 'open' : 'closed'} ${chatEnlarged ? 'enlarged' : ''}`}
+        style={chatEnlarged ? { zIndex: 999 } : {}}
+      >
+        <div className="chat-header">
+          <div className="flex items-center gap-2 cursor-pointer flex-1" onClick={() => setChatOpen(prev => !prev)}>
             <MessageSquare size={18} className="text-accent" />
             <h3>RM Copilot Chat</h3>
             {chatStreaming && <span className="streaming-indicator animate-pulse">Streaming</span>}
           </div>
-          <button className="chat-toggle-btn">
-            {chatOpen ? <ChevronDown size={18} /> : <ChevronUp size={18} />}
-          </button>
+          <div className="flex items-center gap-2">
+            {chatOpen && (
+              <button 
+                type="button"
+                className="icon-btn chat-enlarge-btn" 
+                onClick={(e) => { e.stopPropagation(); setChatEnlarged(prev => !prev); }}
+                title={chatEnlarged ? "Collapse" : "Enlarge to Center Modal"}
+                style={{ background: 'none', border: 'none', padding: '4px', cursor: 'pointer', display: 'flex', alignItems: 'center' }}
+              >
+                {chatEnlarged ? <Minimize2 size={16} className="text-accent" /> : <Maximize2 size={16} className="text-accent" />}
+              </button>
+            )}
+            <button className="chat-toggle-btn" onClick={() => setChatOpen(prev => !prev)}>
+              {chatOpen ? <ChevronDown size={18} /> : <ChevronUp size={18} />}
+            </button>
+          </div>
         </div>
 
         {chatOpen && (
@@ -936,22 +1409,107 @@ export default function App() {
             <div className="chat-messages scrollable">
               {chatMessages.map((msg, i) => (
                 <div key={i} className={`message-bubble ${msg.sender}`}>
-                  <div className="msg-content">
-                    <p style={{ whiteSpace: 'pre-wrap' }}>{msg.text}</p>
-                    {msg.citations?.length > 0 && (
-                      <div className="citations-list mt-2">
-                        {msg.citations.map((cit, idx) => (
-                          <div key={idx} className="cit-badge">
-                            {idx + 1}
-                            <div className="cit-tooltip">
-                              <strong>Source:</strong> {cit.source?.split('/').pop()}<br />
-                              <strong>Snippet:</strong> {cit.excerpt}
-                            </div>
-                          </div>
-                        ))}
+                  {editingIndex === i ? (
+                    <div className="msg-edit-container flex flex-col gap-2 w-full" style={{ width: '100%' }}>
+                      <textarea 
+                        className="chat-edit-textarea text-sm p-2 rounded border border-accent bg-panel text-white w-full"
+                        value={editingText}
+                        onChange={(e) => setEditingText(e.target.value)}
+                        rows={Math.max(4, editingText.split('\n').length)}
+                        style={{ 
+                          resize: 'vertical', 
+                          width: '100%', 
+                          boxSizing: 'border-box', 
+                          backgroundColor: 'rgba(0, 0, 0, 0.4)', 
+                          color: '#fff', 
+                          border: '1px solid var(--accent-color)',
+                          borderRadius: '6px',
+                          padding: '8px'
+                        }}
+                      />
+                      <div className="flex gap-2 justify-end mt-1">
+                        <button 
+                          type="button" 
+                          className="px-2 py-1 text-xs rounded bg-accent text-white cursor-pointer font-semibold"
+                          onClick={() => handleSaveEdit(i)}
+                          style={{ backgroundColor: 'var(--accent-color)', border: 'none', padding: '4px 10px', borderRadius: '4px', color: '#fff', cursor: 'pointer' }}
+                        >
+                          Save
+                        </button>
+                        <button 
+                          type="button" 
+                          className="px-2 py-1 text-xs rounded bg-muted text-white cursor-pointer"
+                          onClick={handleCancelEdit}
+                          style={{ backgroundColor: 'rgba(255, 255, 255, 0.1)', border: 'none', padding: '4px 10px', borderRadius: '4px', color: '#fff', cursor: 'pointer' }}
+                        >
+                          Cancel
+                        </button>
                       </div>
-                    )}
-                  </div>
+                    </div>
+                  ) : (
+                    <div className="msg-content w-full">
+                      {renderMarkdown(msg.text)}
+                      {msg.citations?.length > 0 && (
+                        <div className="citations-list mt-2">
+                          {msg.citations.map((cit, idx) => (
+                            <div key={idx} className="cit-badge">
+                              {idx + 1}
+                              <div className="cit-tooltip">
+                                <strong>Source:</strong> {cit.source?.split('/').pop()}<br />
+                                <strong>Snippet:</strong> {cit.excerpt}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {msg.agentTrace && msg.agentTrace.length > 0 && (
+                        <div className="agent-trace-container mt-2">
+                          <div className="agent-trace-title">
+                            <Sparkles size={12} className="text-accent" />
+                            <span>Reasoning Trace</span>
+                          </div>
+                          <div className="agent-trace-flow">
+                            {msg.agentTrace.map((agentName, idx) => (
+                              <div key={idx} className="agent-trace-node-wrapper">
+                                <span className="agent-trace-badge">
+                                  {agentName.replace("Agent", "")}
+                                </span>
+                                {idx < msg.agentTrace.length - 1 && (
+                                  <span className="agent-trace-connector">➔</span>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      
+                      {/* Copy & Edit Action Buttons */}
+                      <div className="msg-actions flex gap-2 mt-2 justify-end" style={{ opacity: 0.6 }}>
+                        <button 
+                          type="button" 
+                          className="msg-action-btn flex items-center gap-1 text-xs cursor-pointer hover:text-accent"
+                          onClick={() => handleCopyMessage(msg.text)}
+                          title="Copy message to clipboard"
+                          style={{ background: 'none', border: 'none', color: 'var(--text-muted)', display: 'inline-flex', alignItems: 'center', cursor: 'pointer', padding: '2px 4px' }}
+                        >
+                          <Copy size={11} />
+                          <span>Copy</span>
+                        </button>
+                        {msg.sender === 'copilot' && (
+                          <button 
+                            type="button" 
+                            className="msg-action-btn flex items-center gap-1 text-xs cursor-pointer hover:text-accent"
+                            onClick={() => handleStartEdit(i, msg.text)}
+                            title="Edit this AI response"
+                            style={{ background: 'none', border: 'none', color: 'var(--text-muted)', display: 'inline-flex', alignItems: 'center', cursor: 'pointer', padding: '2px 4px' }}
+                          >
+                            <Edit size={11} />
+                            <span>Edit</span>
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  )}
                   <span className="msg-time">{msg.timestamp}</span>
                 </div>
               ))}
@@ -968,7 +1526,7 @@ export default function App() {
               {chatStreaming && streamingText && (
                 <div className="message-bubble copilot">
                   <div className="msg-content">
-                    <p style={{ whiteSpace: 'pre-wrap' }}>{streamingText}</p>
+                    {renderMarkdown(streamingText)}
                   </div>
                   <span className="msg-time">Streaming...</span>
                 </div>
@@ -1071,9 +1629,31 @@ export default function App() {
                       </button>
                     ))}
                   </div>
+
+                  {/* A/B Tone Selector */}
+                  <div className="tone-selector-container mb-4">
+                    <span className="text-muted text-xs block mb-1.5 font-semibold tracking-wider uppercase">Tone Variations</span>
+                    <div className="flex gap-2">
+                      <button 
+                        type="button" 
+                        className={`tab ${outreachTone === 'option_a' ? 'active' : ''}`} 
+                        onClick={() => handleToneChange('option_a')}
+                      >
+                        Direct &amp; Professional
+                      </button>
+                      <button 
+                        type="button" 
+                        className={`tab ${outreachTone === 'option_b' ? 'active' : ''}`} 
+                        onClick={() => handleToneChange('option_b')}
+                      >
+                        Conversational &amp; Advisory
+                      </button>
+                    </div>
+                  </div>
+
                   <div className="editor-group">
                     <label>Message Content (Editable)</label>
-                    <textarea value={outreachText} onChange={e => setOutreachText(e.target.value)} rows={10} />
+                    <textarea value={outreachText} onChange={e => handleTextChange(e.target.value)} rows={10} />
                   </div>
                   <div className="limit-warnings mt-4">
                     <div className="info-row">

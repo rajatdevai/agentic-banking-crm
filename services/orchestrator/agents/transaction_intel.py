@@ -90,14 +90,18 @@ class TransactionIntelAgent(BaseAgent):
 
     async def execute(self, state: AgentState) -> dict:
         customer_id = state["customer_id"]
-        cutoff = datetime.now(timezone.utc) - timedelta(days=90)
+        
+        # Support custom transaction time windows from state
+        start_date = state.get("txn_start_date") or (datetime.now(timezone.utc) - timedelta(days=90))
+        end_date = state.get("txn_end_date") or datetime.now(timezone.utc)
 
-        # Fetch last 90 days of transactions
+        # Fetch transactions in date range
         result = await self._db.execute(
             select(Transaction).where(
                 and_(
                     Transaction.customer_id == customer_id,
-                    Transaction.txn_at >= cutoff,
+                    Transaction.txn_at >= start_date,
+                    Transaction.txn_at <= end_date,
                 )
             ).order_by(Transaction.txn_at.asc())
         )
@@ -165,8 +169,14 @@ class TransactionIntelAgent(BaseAgent):
             mcc = txn.merchant_category or "unknown"
             cat = _MCC_CATEGORIES.get(mcc, "other")
 
-            # Keyword fallback for uncategorised transactions
             merchant_lower = (txn.merchant_name or "").lower()
+            notes_lower = (txn.notes or "").lower()
+
+            # Global override for international wire transfers
+            if "international" in merchant_lower or "wire" in merchant_lower or "offshore" in merchant_lower or "outward" in notes_lower:
+                cat = "international_transfer"
+
+            # Keyword fallback for uncategorised transactions
             if cat == "other":
                 if any(k in merchant_lower for k in _JEWELLERY_KEYWORDS):
                     cat = "jewellery"

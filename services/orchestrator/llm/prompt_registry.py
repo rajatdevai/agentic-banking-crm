@@ -37,6 +37,7 @@ class PromptKey(str, Enum):
     OUTREACH_EMAIL = "outreach_email"
     RM_COPILOT_CONVERSATION = "rm_copilot"
     OUTPUT_SELF_CORRECTION = "output_self_correction"
+    PARSE_COPILOT_FILTERS = "parse_copilot_filters"
 
 
 # ---------------------------------------------------------------------------
@@ -141,6 +142,7 @@ Tone Guidelines (from persona playbook):
 {{ tone_guidelines }}
 
 Customer Context:
+- Customer Name: {{ customer_name }}
 - Persona: {{ persona_type | replace("_", " ") | title }}
 - Life Situation: {{ event_type | replace("_", " ") | title }}
 - Recommended Product: {{ product_type | replace("_", " ") | title }}
@@ -148,19 +150,25 @@ Customer Context:
 Situation Summary:
 {{ explanation_summary }}
 
-Write a WhatsApp message (120-180 words) that:
-1. Opens warmly without using the customer's name (use "Dear Valued Customer" or leave unnamed)
-2. References their current life situation naturally and empathetically
-3. Introduces the product as a solution, not a sales pitch
-4. Mentions a specific benefit relevant to their situation
-5. Has a clear call to action (schedule a call, reply to this message)
-6. Closes professionally with the RM's name: {{ rm_name }}
+Generate a JSON response containing exactly two WhatsApp message options (each 120-180 words) with the following keys:
+1. "option_a": A "Direct & Professional" variation. Polite, concise, and focused on the product value.
+2. "option_b": A "Conversational & Advisory" variation. Empathetic, friendly, and advisory-focused first.
 
-Constraints:
-- NO personal identifiers (no names, PAN, phone numbers, account numbers)
-- Sound human and warm, not like a template
-- WhatsApp format: short paragraphs, occasional emoji (professional context only)
-- Output the message text only — no JSON wrapper
+Each option must:
+1. Open warmly using the customer's actual first name: Dear {{ customer_name.split()[0] }}, or Hello {{ customer_name.split()[0] }},
+2. Reference their current life situation naturally and empathetically.
+3. Introduce the product as a solution, not a sales pitch.
+4. Mention a specific benefit or numerical example relevant to their situation (e.g. overdraft limits, interest costs, EMI flexibility).
+5. Have a clear call to action (schedule a call, reply to this message).
+6. Close professionally with the RM's actual name: {{ rm_name }} (Your Relationship Manager).
+
+CRITICAL INSTRUCTIONS:
+- You MUST use the actual customer first name ({{ customer_name.split()[0] }}) in the greeting. Do NOT write "Dear Valued Customer" or "Dear Customer" or use any generic greeting placeholders.
+- You MUST sign off with the Relationship Manager's actual name ({{ rm_name }}). Do NOT write "Your Relationship Manager" or "Relationship Manager" or use any generic signature placeholders.
+- Sound human and warm, not like a template.
+- Use the actual customer context provided above.
+- WhatsApp format: short paragraphs, occasional emoji (professional context only).
+- Return ONLY a valid JSON object. No explanation, no markdown fences.
 """.strip(),
 
     # -------------------------------------------------------------------------
@@ -171,22 +179,30 @@ Constraints:
 You are writing an SMS from an {{ bank_name }} Relationship Manager to a customer.
 
 Tone: {{ tone_guidelines }}
+Customer Name: {{ customer_name }}
 Situation: {{ event_type | replace("_", " ") | title }}
 Product: {{ product_type | replace("_", " ") | title }}
 
-Write an SMS (max 160 characters):
-- Brief and action-oriented
-- References their life situation in one phrase
-- One clear call to action
-- Sign with RM name: {{ rm_name }}
-- NO personal identifiers
+Generate a JSON response containing exactly two SMS variations (each max 160 characters) with the following keys:
+1. "option_a": A "Direct & Professional" variation. Brief, action-oriented, clear CTA.
+2. "option_b": A "Conversational & Advisory" variation. Conversational, warm, helpful CTA.
 
-Output SMS text only.
+Each option must:
+- Address the customer by their actual first name ({{ customer_name.split()[0] }}).
+- Reference their life situation in one phrase.
+- One clear call to action.
+- Sign with RM's actual name: {{ rm_name }}.
+
+CRITICAL INSTRUCTIONS:
+- You MUST use the actual customer first name ({{ customer_name.split()[0] }}) in the greeting. Do NOT write "Dear Valued Customer" or "Dear Customer" or use any generic greeting placeholders.
+- You MUST sign off with the Relationship Manager's actual name ({{ rm_name }}). Do NOT write "Your Relationship Manager" or "Relationship Manager" or use any generic signature placeholders.
+
+Return ONLY a valid JSON object. No explanation, no markdown fences.
 """.strip(),
 
     # -------------------------------------------------------------------------
     # OUTREACH_EMAIL
-    # Variables: same as WHATSAPP + subject_line
+    # Variables: same as WHATSAPP
     # -------------------------------------------------------------------------
     PromptKey.OUTREACH_EMAIL: """
 You are writing a professional email from an {{ bank_name }} Relationship Manager.
@@ -194,24 +210,97 @@ You are writing a professional email from an {{ bank_name }} Relationship Manage
 Tone Guidelines:
 {{ tone_guidelines }}
 
+Customer Name: {{ customer_name }}
 Customer Situation: {{ event_type | replace("_", " ") | title }}
 Recommended Product: {{ product_type | replace("_", " ") | title }}
 Summary: {{ explanation_summary }}
 
-Write a professional email with:
-Subject: [Generate an appropriate subject line]
-Body: 
-  - Professional greeting (no personal name — use "Dear Valued Customer")
-  - 2 short paragraphs: (1) acknowledge their life situation, (2) introduce product benefit
-  - Clear call to action: schedule a call or reply
-  - Professional sign-off with RM name ({{ rm_name }}) and bank name ({{ bank_name }})
+Generate a JSON response containing exactly two email variations with the following keys:
+1. "option_a": A "Direct & Professional" variation. Clear subject line, concise structure.
+2. "option_b": A "Conversational & Advisory" variation. Consultative subject line, warm narrative.
 
-Format:
+Each option must be formatted as a single string containing both subject and body in the following structure:
 SUBJECT: [subject line]
 BODY:
 [email body]
 
-NO personal identifiers anywhere in the output.
+Each email must:
+- Use a professional greeting addressing the customer by their actual first name (e.g., Dear {{ customer_name.split()[0] }}).
+- Have 2 short paragraphs: (1) acknowledge their life situation, (2) introduce product benefit with specifics.
+- Have a clear call to action.
+- Sign with RM's actual name ({{ rm_name }}), Title (Your Relationship Manager), and bank name ({{ bank_name }}).
+
+CRITICAL INSTRUCTIONS:
+- You MUST use the actual customer first name ({{ customer_name.split()[0] }}) in the greeting. Do NOT write "Dear Valued Customer" or "Dear Customer" or use any generic greeting placeholders.
+- You MUST sign off with the Relationship Manager's actual name ({{ rm_name }}). Do NOT write "Your Relationship Manager" or "Relationship Manager" or use any generic signature placeholders.
+
+Return ONLY a valid JSON object. No explanation, no markdown fences.
+""".strip(),
+
+    # -------------------------------------------------------------------------
+    # PARSE_COPILOT_FILTERS
+    # Variables: rm_question
+    # -------------------------------------------------------------------------
+    PromptKey.PARSE_COPILOT_FILTERS: """
+You are an NLP parser for a banking CRM. Analyze the Relationship Manager's query and extract target filters as JSON.
+
+Query: "{{ rm_question }}"
+
+Available Persona Types:
+- corporate_professional
+- young_it_professional
+- startup_founder
+- doctor
+- lawyer
+- hni
+- affluent_investor
+- business_owner
+- nri_family
+- newly_married
+- pre_retirement
+
+Available Event Types:
+- wedding
+- home_purchase
+- foreign_education
+- child_education
+- medical
+- business_expansion
+- promotion
+- wealth_migration
+- retirement_planning
+- new_born
+
+Available Product Types:
+- personal_loan
+- home_loan
+- education_loan
+- working_capital_loan
+- loan_against_securities
+- gold_loan
+- wealth_advisory
+- mutual_fund
+- fixed_deposit
+- forex_card
+- current_account
+- health_insurance
+- child_education_plan
+- premium_credit_card
+- insurance
+- business_credit_card
+
+Extract the filters into this exact JSON schema:
+{
+  "persona_type": "one of the available persona types, or null",
+  "event_type": "one of the available event types, or null",
+  "product_type": "one of the available product types, or null",
+  "time_window": "any mentioned time window like 'this month', 'last month', 'next 30 days', 'this quarter', or null",
+  "is_pipeline_query": true/false (true if the query explicitly asks to find/search/score/run/recommend for a group of customers or portfolio)
+}
+
+Rules:
+- If a filter is not mentioned or cannot be inferred, set it to null.
+- Return ONLY the raw JSON block. No explanation, no markdown fences.
 """.strip(),
 
     # -------------------------------------------------------------------------
@@ -220,20 +309,52 @@ NO personal identifiers anywhere in the output.
     #            current_date, rm_name
     # -------------------------------------------------------------------------
     PromptKey.RM_COPILOT_CONVERSATION: """
-You are RM Copilot, a highly strategic, elite Senior Relationship Manager and Private Banking mentor advising {{ rm_name }}.
+You are RM Copilot, a highly strategic, elite Senior Relationship Manager and Private Banking advisor.
 Today's date: {{ current_date }}
 
 RM's Question:
-{{ rm_question }}
+"{{ rm_question }}"
 
-Portfolio Summary:
+Portfolio Summary (Actual CRM Customer Portfolio Data):
 {{ portfolio_summary }}
 
-Relevant Context (from knowledge base):
+Relevant Context (from product catalog & policy documents):
 {{ rag_context }}
 
-Provide a top-tier, highly professional, tactical, and empathetic response. Your advice should sound like it comes from a veteran Relationship Manager who knows how to build trust, handle client objections (like interest rate concerns or timing), and close opportunities. Format your response as a direct, structured briefing with clear, actionable talking points and scripts.
-If the answer requires customer-specific data not in the context, highlight that clearly.
+INSTRUCTIONS:
+- You MUST answer the RM's question using the actual customer portfolio data provided above. Be specific, precise, and data-driven.
+- If the RM asks about a specific customer (by name, description, or context), locate that customer's details in the Portfolio Summary (specifically their CIBIL score, monthly salary, account balance, total investments, liabilities, products held, active opportunities, and detected events). You MUST ground your entire response, strategic briefing steps, and suggested outreach directly in their actual numbers and context.
+- Avoid general instructions. For instance, if a customer is a Startup Founder with high liabilities, customize the engagement steps and pitch to fit a startup owner's cashflow needs.
+- Do NOT generate scripts with general placeholders like "[Customer Name]" or "[Product]" if the customer is identified in the query. Use their actual name and recommended product.
+- You MUST format your response using standard Markdown using exactly these headers (do not skip headers; if a section is empty, explain why based on data):
+
+### 📋 Executive Summary
+A brief 2-3 sentence overview answering the question directly, incorporating high-level numbers or specific customer names.
+
+### 🔍 Key Findings
+Bullet points of the key facts, signals, or trends parsed from the data.
+
+### 👤 Customer Insights
+A structured breakdown of relevant customer(s). For each customer mentioned, include:
+- **[Customer Name]** (Persona, CIBIL: [Score])
+- **Conversion Probability:** [Score]%
+- **Recommended Product:** [Product]
+- **Positive Signals:** [Evidence or transaction events]
+- **Risk Flags:** [Any risk tier or existing liability warnings]
+
+### ⚠️ Risk Flags
+A summary of risk factors (e.g. high debt, missed EMIs, low credit score, high risk tier) for the relevant customers.
+
+### ⚡ Recommended Actions
+Actionable, concrete next steps for the RM (e.g. "Call within 48 hours to discuss X").
+
+### 💬 Suggested Outreach
+A short, personalized message draft (WhatsApp or SMS) tailored to the client's detected events and needs, ready to copy-paste.
+
+Rules:
+- Never write long essay-style paragraphs. Keep it clean, structured, and easy to scan like ChatGPT.
+- Do NOT include any fictitious customer data. Only use information provided in the Portfolio Summary and RAG Context.
+- Do NOT include raw phone numbers, PAN, or account numbers.
 """.strip(),
 
     # -------------------------------------------------------------------------

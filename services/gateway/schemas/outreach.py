@@ -32,6 +32,8 @@ class OutreachPreviewResponse(BaseModel):
     opportunity_id: uuid.UUID
     channel: OutreachChannel
     message_body: str
+    message_option_a: Optional[str] = None
+    message_option_b: Optional[str] = None
     persona_tone: Optional[str] = None
     generated_at: datetime
 
@@ -77,3 +79,25 @@ class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     expires_in_minutes: int
+
+
+class OutreachCampaignItem(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    campaign_id: uuid.UUID
+    customer_id: uuid.UUID
+    customer_name: str
+    opportunity_id: uuid.UUID
+    product_recommended: str
+    channel: OutreachChannel
+    message_body: str
+    status: str
+    sent_at: Optional[datetime] = None
+    delivered_at: Optional[datetime] = None
+    opened_at: Optional[datetime] = None
+    converted_at: Optional[datetime] = None
+
+
+class OutreachCampaignsListResponse(BaseModel):
+    campaigns: list[OutreachCampaignItem]
+

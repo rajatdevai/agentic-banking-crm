@@ -97,87 +97,91 @@ async def copilot_chat(
 
     async def event_generator() -> AsyncGenerator[str, None]:
         try:
-            from services.orchestrator.agents.rm_copilot import RMCopilotAgent
+            from services.orchestrator.graph.builder import build_copilot_graph
+            from services.orchestrator.graph.state import initial_state as fresh_initial_state
             from services.orchestrator.tools.vector_tools import search_knowledge_base
-            from services.orchestrator.llm.prompt_registry import render_prompt, PromptKey
-            from services.orchestrator.llm.router import get_llm_router
 
-            # Instantiate agent
-            agent = RMCopilotAgent(db=db, redis=redis)
+            # 1. Prepare queue and state
+            customer_name = ""
+            if body.customer_context_ids:
+                from sqlalchemy import select
+                from shared.db.models import Customer
+                stmt = select(Customer).where(Customer.id == body.customer_context_ids[0])
+                res = await db.execute(stmt)
+                customer = res.scalar_one_or_none()
+                if customer:
+                    customer_name = customer.name
 
-            # Retrieve context with citations — all 4 collections fetched IN PARALLEL
+            token_queue = asyncio.Queue()
+            state = fresh_initial_state(
+                customer_id=body.customer_context_ids[0] if body.customer_context_ids else "",
+                customer_name=customer_name,
+                rm_id=str(current_rm.id),
+                rm_name=current_rm.name,
+                session_id=session_id,
+                trace_id=trace_id,
+                rm_question=body.message,
+                token_queue=token_queue,
+            )
+
+            # 2. Fetch citations (run sequentially to prevent concurrent DB session access)
             citations = []
-            rag_context_parts = []
             collections = ["product_catalog", "policy_docs", "persona_playbooks", "market_context"]
-
-            rag_results = await asyncio.gather(
-                *[
-                    search_knowledge_base(
+            for col in collections:
+                try:
+                    res = await search_knowledge_base(
                         query=body.message,
                         db=db,
                         doc_type_filter=col,
                         redis_client=redis,
                         top_k=2,
                     )
-                    for col in collections
-                ],
-                return_exceptions=True,
-            )
+                    if res.formatted_context and res.formatted_context != "No relevant context found in the knowledge base.":
+                        for cit in res.source_citations:
+                            citations.append({
+                                "source": cit.get("source_file", ""),
+                                "doc_type": cit.get("doc_type", ""),
+                                "excerpt": cit.get("excerpt", "")[:250],
+                                "score": cit.get("rrf_score", 0.0),
+                            })
+                except Exception as exc:
+                    logger.warning("citation_retrieval_failed", collection=col, error=str(exc))
 
-            for col, context_res in zip(collections, rag_results):
-                if isinstance(context_res, Exception):
-                    logger.warning("rag_collection_error", collection=col, error=str(context_res))
-                    continue
-                if context_res.formatted_context and context_res.formatted_context != "No relevant context found in the knowledge base.":
-                    rag_context_parts.append(f"[{col.upper()}]\n{context_res.formatted_context}")
-                    for cit in context_res.source_citations:
-                        citations.append({
-                            "source": cit.get("source_file", ""),
-                            "doc_type": cit.get("doc_type", ""),
-                            "excerpt": cit.get("excerpt", "")[:250],
-                            "score": cit.get("rrf_score", 0.0),
-                        })
+            # 3. Compile copilot graph
+            graph = build_copilot_graph(db=db, redis=redis)
 
-            rag_context = "\n\n".join(rag_context_parts) or "No relevant context found in knowledge base."
+            # 4. Start graph execution in the background
+            config = {"configurable": {"thread_id": session_id}}
+            task = asyncio.create_task(graph.ainvoke(state, config=config))
 
-            # Fetch portfolio summary
-            portfolio_summary = await agent._get_portfolio_summary(str(current_rm.id))
-
-            # Build masked prompt
-            prompt = render_prompt(
-                PromptKey.RM_COPILOT_CONVERSATION,
-                rm_name=current_rm.name or "Relationship Manager",
-                rm_question=body.message,
-                portfolio_summary=portfolio_summary,
-                rag_context=rag_context,
-                current_date=date.today().isoformat(),
-            )
-
-            # PII Pre-flight guard
-            agent.assert_no_pii_in_prompt(prompt)
-
-            # Stream response token-by-token
-            async for token, is_final in get_llm_router().stream_primary(
-                prompt=prompt,
-                session_id=session_id,
-            ):
+            # 5. Stream tokens from the queue
+            while not task.done() or not token_queue.empty():
                 if await request.is_disconnected():
                     logger.info("copilot_stream_client_disconnected", trace_id=trace_id)
                     break
-                if is_final:
-                    # Final event with citations
-                    yield await _sse_event({
-                        "token": "",
-                        "trace_id": trace_id,
-                        "done": True,
-                        "citations": citations
-                    })
-                else:
+                try:
+                    token = await asyncio.wait_for(token_queue.get(), timeout=0.1)
                     yield await _sse_event({
                         "token": token,
                         "trace_id": trace_id,
                         "done": False
                     })
+                    token_queue.task_done()
+                except asyncio.TimeoutError:
+                    continue
+
+            # 6. Retrieve result state
+            result_state = await task
+            agent_trace = result_state.get("agent_trace", ["RMCopilotAgent"])
+
+            # Send final completion event with trace and citations
+            yield await _sse_event({
+                "token": "",
+                "trace_id": trace_id,
+                "done": True,
+                "citations": citations,
+                "agent_trace": agent_trace
+            })
 
         except Exception as exc:
             logger.error("copilot_stream_error", trace_id=trace_id, error=str(exc))

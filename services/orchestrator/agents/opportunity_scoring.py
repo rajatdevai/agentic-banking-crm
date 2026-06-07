@@ -42,6 +42,7 @@ _EVENT_PRODUCT_MAP: dict[EventType, list[ProductType]] = {
     EventType.MEDICAL:            [ProductType.PERSONAL_LOAN, ProductType.HEALTH_INSURANCE],
     EventType.RETIREMENT_PLANNING:[ProductType.MUTUAL_FUND, ProductType.WEALTH_ADVISORY, ProductType.FIXED_DEPOSIT],
     EventType.NEW_BORN:           [ProductType.CHILD_EDUCATION_PLAN, ProductType.HEALTH_INSURANCE],
+    EventType.WEALTH_MIGRATION:   [ProductType.WEALTH_ADVISORY, ProductType.MUTUAL_FUND],
 }
 
 # Revenue potential by product (estimated annual margin in ₹)
@@ -168,9 +169,10 @@ class OpportunityScoringAgent(BaseAgent):
                 try:
                     from services.orchestrator.tools.scoring_tools import get_conversion_probability
                     conversion_prob = await get_conversion_probability(
-                        customer_profile=cp,
-                        event=event,
-                        product=product,
+                        customer_id=cp.customer_id,
+                        event_type=event.event_type.value,
+                        db=self._db,
+                        redis=self._redis,
                     )
                     scoring_method = "xgboost"
                 except Exception as model_exc:

@@ -218,8 +218,9 @@ def build_copilot_graph(
     builder.add_edge(START, "rm_copilot")
     builder.add_edge("rm_copilot", END)
 
-    cp = checkpointer or get_checkpointer(redis)
-    graph = builder.compile(checkpointer=cp)
+    # A single-node chat assistant has no multi-step state to checkpoint/resume.
+    # Disabling checkpointer avoids serialization issues with non-serializable objects (like asyncio.Queue) in state.
+    graph = builder.compile(checkpointer=checkpointer)
 
     logger.info("copilot_graph_compiled")
     return graph

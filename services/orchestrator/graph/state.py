@@ -17,7 +17,7 @@ Design rules:
 from __future__ import annotations
 
 import operator
-from typing import Annotated, Optional, TypedDict
+from typing import Annotated, Any, Optional, TypedDict
 
 from shared.models.agent_state import (
     CustomerProfile,
@@ -54,7 +54,9 @@ class AgentState(TypedDict, total=False):
 
     # --- Request identifiers (set before graph entry) ---
     customer_id: str
+    customer_name: str
     rm_id: str
+    rm_name: str
     session_id: str
     trace_id: str
 
@@ -74,6 +76,7 @@ class AgentState(TypedDict, total=False):
     # --- RM Copilot conversational mode ---
     rm_question: Optional[str]              # Free-text question from the RM
     copilot_response_chunks: Annotated[list[str], operator.add]   # Streaming tokens
+    token_queue: Optional[Any]              # asyncio.Queue for real-time SSE token streaming
 
     # --- Execution metadata (maintained by BaseAgent wrapper) ---
     errors: Annotated[list[str], operator.add]       # Error messages from failed agents
@@ -86,10 +89,13 @@ class AgentState(TypedDict, total=False):
 
 def initial_state(
     customer_id: str,
+    customer_name: str,
     rm_id: str,
+    rm_name: str,
     session_id: str,
     trace_id: str,
     rm_question: Optional[str] = None,
+    token_queue: Optional[Any] = None,
 ) -> AgentState:
     """
     Factory function for creating a fresh AgentState at graph entry.
@@ -98,7 +104,9 @@ def initial_state(
     """
     return AgentState(
         customer_id=customer_id,
+        customer_name=customer_name,
         rm_id=rm_id,
+        rm_name=rm_name,
         session_id=session_id,
         trace_id=trace_id,
         customer_profile=None,
@@ -110,6 +118,7 @@ def initial_state(
         explanation=None,
         outreach_messages=[],
         rm_question=rm_question,
+        token_queue=token_queue,
         copilot_response_chunks=[],
         errors=[],
         agent_trace=[],

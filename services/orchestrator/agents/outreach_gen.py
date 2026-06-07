@@ -56,6 +56,8 @@ class OutreachGenAgent(BaseAgent):
 
         top_opp = opportunities[0]
         session_id = state.get("session_id", "unknown")
+        customer_name = state.get("customer_name", "Valued Customer")
+        rm_name = state.get("rm_name", "Your Relationship Manager")
 
         # Retrieve persona tone guidelines from RAG
         tone_guidelines = await self._get_tone_guidelines(cp.persona_type.value)
@@ -80,7 +82,8 @@ class OutreachGenAgent(BaseAgent):
                 product_type=top_opp.product_recommended.value,
                 explanation_summary=explanation_summary,
                 tone_guidelines=tone_guidelines,
-                rm_name="Your Relationship Manager",  # RM name masked — real name from gateway context
+                customer_name=customer_name,
+                rm_name=rm_name,
                 bank_name="RM Copilot Bank",
             )
 
@@ -89,13 +92,32 @@ class OutreachGenAgent(BaseAgent):
 
             raw_message = await get_llm_router().call_primary(
                 prompt=prompt,
-                system="You are a professional banking relationship manager writing to a valued customer.",
+                system="You are a professional banking relationship manager. You must address the customer by their actual name and sign off with your actual name as specified in the context.",
                 session_id=session_id,
                 temperature=0.5,
             )
 
+            import json
+            try:
+                cleaned_raw = raw_message.strip()
+                if cleaned_raw.startswith("```json"):
+                    cleaned_raw = cleaned_raw[7:]
+                if cleaned_raw.endswith("```"):
+                    cleaned_raw = cleaned_raw[:-3]
+                cleaned_raw = cleaned_raw.strip()
+                parsed_json = json.loads(cleaned_raw)
+                opt_a = parsed_json.get("option_a", "").strip()
+                opt_b = parsed_json.get("option_b", "").strip()
+            except Exception as e:
+                logger.warning("failed_to_parse_outreach_json", error=str(e), raw_message=raw_message)
+                opt_a = raw_message
+                opt_b = raw_message
+
             # Scan for leaked PII vault tokens
-            cleaned_message, pii_safe = self._sanitise_message(raw_message)
+            cleaned_opt_a, safe_a = self._sanitise_message(opt_a)
+            cleaned_opt_b, safe_b = self._sanitise_message(opt_b)
+            cleaned_message = cleaned_opt_a
+            pii_safe = safe_a and safe_b
 
             msg = OutreachMessage(
                 channel=channel,
@@ -104,6 +126,8 @@ class OutreachGenAgent(BaseAgent):
                 pii_safe=pii_safe,
                 opportunity_id=top_opp.db_opportunity_id,
                 product_type=top_opp.product_recommended,
+                option_a=cleaned_opt_a,
+                option_b=cleaned_opt_b,
             )
             messages.append(msg)
             logger.info(

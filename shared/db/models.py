@@ -454,6 +454,8 @@ class OutreachCampaign(Base):
         nullable=False,
     )
     message_body: Mapped[str] = mapped_column(Text, nullable=False)
+    message_option_a: Mapped[str | None] = mapped_column(Text, nullable=True)
+    message_option_b: Mapped[str | None] = mapped_column(Text, nullable=True)
     persona_tone: Mapped[str | None] = mapped_column(String(50), nullable=True)
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

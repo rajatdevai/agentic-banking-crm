@@ -231,6 +231,24 @@ def _retirement_planning_rule(ts: TransactionSummary) -> Optional[tuple[float, d
     return confidence, signals
 
 
+def _wealth_migration_rule(ts: TransactionSummary) -> Optional[tuple[float, dict]]:
+    """
+    Wealth migration fires when forex transfer total >= ₹200,000.
+    """
+    if not ts.has_forex_transfer or ts.forex_transfer_total < 200_000:
+        return None
+
+    signals = {
+        "forex_transfer_total": ts.forex_transfer_total,
+        "rules_fired": ["large_forex_transfer_detected"],
+    }
+    confidence = 0.8
+    if ts.forex_transfer_total >= 1_000_000:
+        confidence = 1.0
+
+    return confidence, signals
+
+
 # ---------------------------------------------------------------------------
 # Rule registry
 # ---------------------------------------------------------------------------
@@ -242,7 +260,9 @@ _RULES: list[EventRule] = [
     EventRule(EventType.BUSINESS_EXPANSION, "Business expansion signals",      0.45, _business_expansion_rule),
     EventRule(EventType.MEDICAL,            "Large medical expense",           0.70, _medical_rule),
     EventRule(EventType.RETIREMENT_PLANNING,"Investor + high savings rate",    0.45, _retirement_planning_rule),
+    EventRule(EventType.WEALTH_MIGRATION,   "Wealth migration signals",        0.70, _wealth_migration_rule),
 ]
+
 
 
 class EventDetectionAgent(BaseAgent):

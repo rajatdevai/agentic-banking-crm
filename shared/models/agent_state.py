@@ -255,3 +255,5 @@ class OutreachMessage:
     db_campaign_id: Optional[str] = None
     opportunity_id: Optional[str] = None
     product_type: Optional[ProductType] = None
+    option_a: Optional[str] = None
+    option_b: Optional[str] = None

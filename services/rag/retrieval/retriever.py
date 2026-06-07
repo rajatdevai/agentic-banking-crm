@@ -72,12 +72,9 @@ async def retrieve(
     # Embed query for dense search
     query_embedding = await embed_query(query)
 
-    # Run dense and sparse searches concurrently
-    import asyncio
-    dense_results, sparse_results = await asyncio.gather(
-        _dense_search(db, query_embedding, doc_type_filter, similarity_threshold),
-        _sparse_search(db, query, doc_type_filter),
-    )
+    # Run dense and sparse searches sequentially to avoid concurrent DB session access
+    dense_results = await _dense_search(db, query_embedding, doc_type_filter, similarity_threshold)
+    sparse_results = await _sparse_search(db, query, doc_type_filter)
 
     # RRF merge
     merged = _reciprocal_rank_fusion(dense_results, sparse_results)

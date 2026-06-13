@@ -6,8 +6,8 @@ require portfolio ownership via require_rm_owns_customer.
 
 Routes:
     GET  /customers/priority-queue              → ranked customer list (Redis cache → DB fallback)
-    GET  /customers/{customer_id}               → full customer profile
-    GET  /customers/{customer_id}/opportunities → active opportunities for a customer
+    GET  /customers/{customer_id}               → full customer profile (Redis cache, 10 min TTL)
+    GET  /customers/{customer_id}/opportunities → active opportunities (Redis cache, 5 min TTL)
     POST /customers/{customer_id}/opportunities/{opportunity_id}/dismiss
 """
 
@@ -60,7 +60,6 @@ async def get_priority_queue(
 ):
     redis = getattr(request.app.state, "redis", None)
     cache_key = f"priority_queue:{current_rm.id}:{limit}"
-    cached = False
 
     # Try Redis cache first
     if redis:
@@ -138,16 +137,31 @@ async def get_priority_queue(
     summary="Get full customer profile",
 )
 async def get_customer_profile(
+    request: Request,
     customer: Customer = Depends(require_rm_owns_customer),
     db: AsyncSession = Depends(get_db),
 ):
-    # Load associated profile
+    redis = getattr(request.app.state, "redis", None)
+    cache_key = f"customer_profile:{customer.id}"
+
+    # ── Redis cache hit ──────────────────────────────────────────────────────
+    if redis:
+        try:
+            raw = await redis.get(cache_key)
+            if raw:
+                data = json.loads(raw)
+                logger.debug("customer_profile_cache_hit", customer_id=str(customer.id))
+                return CustomerProfileResponse(**data)
+        except Exception as exc:
+            logger.warning("customer_profile_cache_error", error=str(exc))
+
+    # ── DB query ─────────────────────────────────────────────────────────────
     result = await db.execute(
         select(CustomerProfile).where(CustomerProfile.customer_id == customer.id)
     )
     profile = result.scalar_one_or_none()
 
-    return CustomerProfileResponse(
+    response = CustomerProfileResponse(
         customer_id=customer.id,
         rm_id=customer.rm_id,
         name=customer.name,
@@ -167,6 +181,19 @@ async def get_customer_profile(
         last_refreshed_at=profile.last_refreshed_at if profile else None,
     )
 
+    # ── Populate cache (10-minute TTL) ───────────────────────────────────────
+    if redis:
+        try:
+            await redis.setex(
+                cache_key,
+                600,  # 10 minutes
+                json.dumps(response.model_dump(mode="json")),
+            )
+        except Exception:
+            pass  # Cache write failure is non-fatal
+
+    return response
+
 
 # ---------------------------------------------------------------------------
 # GET /customers/{customer_id}/opportunities
@@ -177,12 +204,31 @@ async def get_customer_profile(
     summary="Get active opportunities for a customer",
 )
 async def get_customer_opportunities(
+    request: Request,
     customer: Customer = Depends(require_rm_owns_customer),
     db: AsyncSession = Depends(get_db),
     include_dismissed: bool = Query(
         default=False, description="Include dismissed opportunities in results"
     ),
 ):
+    redis = getattr(request.app.state, "redis", None)
+    cache_key = f"customer_opps:{customer.id}"
+
+    # ── Redis cache hit (only for the default non-dismissed view) ────────────
+    if redis and not include_dismissed:
+        try:
+            raw = await redis.get(cache_key)
+            if raw:
+                data = json.loads(raw)
+                logger.debug("customer_opps_cache_hit", customer_id=str(customer.id))
+                return OpportunityListResponse(
+                    opportunities=[OpportunityResponse(**o) for o in data["opportunities"]],
+                    total=data["total"],
+                )
+        except Exception as exc:
+            logger.warning("customer_opps_cache_error", error=str(exc))
+
+    # ── DB query ─────────────────────────────────────────────────────────────
     query = select(Opportunity).where(
         Opportunity.customer_id == customer.id,
         Opportunity.deleted_at.is_(None),
@@ -195,25 +241,37 @@ async def get_customer_opportunities(
     result = await db.execute(query)
     opportunities = result.scalars().all()
 
-    return OpportunityListResponse(
-        opportunities=[
-            OpportunityResponse(
-                opportunity_id=opp.id,
-                customer_id=opp.customer_id,
-                event_id=opp.event_id,
-                product_recommended=opp.product_recommended,
-                priority_score=float(opp.priority_score),
-                conversion_prob=float(opp.conversion_prob),
-                revenue_potential=float(opp.revenue_potential) if opp.revenue_potential else None,
-                risk_flags=opp.risk_flags,
-                explanation=opp.explanation,
-                status=opp.status,
-                created_at=opp.created_at,
+    opps_out = [
+        OpportunityResponse(
+            opportunity_id=opp.id,
+            customer_id=opp.customer_id,
+            event_id=opp.event_id,
+            product_recommended=opp.product_recommended,
+            priority_score=float(opp.priority_score),
+            conversion_prob=float(opp.conversion_prob),
+            revenue_potential=float(opp.revenue_potential) if opp.revenue_potential else None,
+            risk_flags=opp.risk_flags,
+            explanation=opp.explanation,
+            status=opp.status,
+            created_at=opp.created_at,
+        )
+        for opp in opportunities
+    ]
+
+    response = OpportunityListResponse(opportunities=opps_out, total=len(opps_out))
+
+    # ── Populate cache (5-minute TTL, only for default view) ─────────────────
+    if redis and not include_dismissed:
+        try:
+            await redis.setex(
+                cache_key,
+                300,  # 5 minutes
+                json.dumps(response.model_dump(mode="json")),
             )
-            for opp in opportunities
-        ],
-        total=len(opportunities),
-    )
+        except Exception:
+            pass  # Cache write failure is non-fatal
+
+    return response
 
 
 # ---------------------------------------------------------------------------
@@ -227,6 +285,7 @@ async def get_customer_opportunities(
 async def dismiss_opportunity(
     opportunity_id: uuid.UUID,
     body: DismissOpportunityRequest,
+    request: Request,
     customer: Customer = Depends(require_rm_owns_customer),
     current_rm: RelationshipManager = Depends(get_current_rm),
     db: AsyncSession = Depends(get_db),
@@ -251,6 +310,15 @@ async def dismiss_opportunity(
 
     opportunity.status = OpportunityStatus.DISMISSED
     await db.commit()
+
+    # ── Invalidate opportunities cache so next fetch reflects the dismiss ────
+    redis = getattr(request.app.state, "redis", None)
+    if redis:
+        try:
+            await redis.delete(f"customer_opps:{customer.id}")
+            logger.debug("customer_opps_cache_invalidated", customer_id=str(customer.id))
+        except Exception:
+            pass
 
     logger.info(
         "opportunity_dismissed",

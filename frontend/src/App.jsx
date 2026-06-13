@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { 
   LogIn, Sun, Moon, LogOut, Shield, ChevronDown, ChevronUp, Send, 
   CheckCircle2, User, Landmark, AlertCircle, 
@@ -13,14 +14,16 @@ import {
 import './App.css';
 
 // ---------------------------------------------------------------------------
-// In-memory caches — survive re-renders, cleared on logout
+// API fetch helpers
 // ---------------------------------------------------------------------------
-const profileCache = new Map();   // customer_id → CustomerProfileResponse
-const oppsCache    = new Map();   // customer_id → OpportunityListResponse.opportunities[]
-
-function clearCaches() {
-  profileCache.clear();
-  oppsCache.clear();
+async function apiFetch(url, token, options = {}) {
+  const res = await fetch(url, {
+    ...options,
+    headers: { 'Authorization': `Bearer ${token}`, ...options.headers },
+  });
+  if (res.status === 401) throw Object.assign(new Error('Unauthorized'), { status: 401 });
+  if (!res.ok) throw new Error(`API error ${res.status}`);
+  return res.json();
 }
 
 function parseInlineMarkdown(text) {
@@ -90,9 +93,75 @@ function renderMarkdown(text) {
   return renderedElements;
 }
 
+function parseStreamingOption(accumulated, key) {
+  let cleaned = accumulated.trim();
+  if (cleaned.startsWith("```json")) {
+    cleaned = cleaned.slice(7);
+  } else if (cleaned.startsWith("```")) {
+    cleaned = cleaned.slice(3);
+  }
+  cleaned = cleaned.trim();
+  
+  const keyIndex = cleaned.indexOf(`"${key}"`);
+  if (keyIndex === -1) return '';
+  
+  const valueSearchArea = cleaned.slice(keyIndex + key.length + 2);
+  const colonIndex = valueSearchArea.indexOf(':');
+  if (colonIndex === -1) return '';
+  
+  const stringStartArea = valueSearchArea.slice(colonIndex + 1).trim();
+  if (!stringStartArea.startsWith('"')) return '';
+  
+  let result = '';
+  let isEscaped = false;
+  for (let i = 1; i < stringStartArea.length; i++) {
+    const char = stringStartArea[i];
+    if (isEscaped) {
+      if (char === 'n') {
+        result += '\n';
+      } else if (char === 't') {
+        result += '\t';
+      } else {
+        result += char;
+      }
+      isEscaped = false;
+    } else if (char === '\\') {
+      isEscaped = true;
+    } else if (char === '"') {
+      break;
+    } else {
+      result += char;
+    }
+  }
+  return result;
+}
+
+function getCachedDrafts() {
+  try {
+    const cached = localStorage.getItem('outreach_drafts_cache');
+    return cached ? JSON.parse(cached) : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveCachedDrafts(cache) {
+  try {
+    localStorage.setItem('outreach_drafts_cache', JSON.stringify(cache));
+  } catch (e) {
+    console.error('Failed to save outreach drafts cache', e);
+  }
+}
+
+function getOppFingerprint(opp) {
+  if (!opp) return '';
+  return `${opp.product_recommended || ''}_${opp.priority_score || ''}_${opp.conversion_prob || ''}_${opp.explanation || ''}`;
+}
+
 export default function App() {
   const [theme, setTheme]       = useState('dark');
   const [token, setToken]       = useState(localStorage.getItem('token') || '');
+  const queryClient             = useQueryClient();
 
   const [currentRM, setCurrentRM] = useState(() => {
     const saved = localStorage.getItem('token');
@@ -112,29 +181,17 @@ export default function App() {
   // App view
   const [view, setView] = useState('queue');
 
-  // Catered Portfolio states
-  const [cateredCampaigns,    setCateredCampaigns]    = useState([]);
-  const [cateredLoading,      setCateredLoading]      = useState(false);
+  // Catered Portfolio UI state
   const [cateredSearch,       setCateredSearch]       = useState('');
   const [cateredStatusFilter, setCateredStatusFilter] = useState('all');
   const [selectedCampaign,    setSelectedCampaign]    = useState(null);
 
-  // Customer queue
-  const [customers,    setCustomers]    = useState([]);
-  const [queueLoading, setQueueLoading] = useState(false);
-
-  // Selected customer
+  // Selected customer/opportunity
   const [selectedCustomer, setSelectedCustomer] = useState(null);
   const [selectedOpp,      setSelectedOpp]      = useState(null);
-  const [opportunities,    setOpportunities]    = useState([]);
-  const [oppsLoading,      setOppsLoading]      = useState(false);
-  const [detailLoading,    setDetailLoading]    = useState(false);
 
-  // Morning digest
+  // Morning digest (expanded/collapsed UI state only — data comes from TanStack Query)
   const [showDigest, setShowDigest] = useState(true);
-  const [digestData, setDigestData] = useState({
-    totalCustomers: 0, highRisk: 0, lowRisk: 0, avgCibil: 750, heldProducts: 0
-  });
 
   // Filters
   const [riskFilter,    setRiskFilter]    = useState('ALL');
@@ -148,14 +205,18 @@ export default function App() {
   // Outreach
   const [showOutreachModal,   setShowOutreachModal]   = useState(false);
   const [outreachChannel,     setOutreachChannel]     = useState('whatsapp');
-  const [outreachText,        setOutreachText]        = useState('');
   const [outreachLoading,     setOutreachLoading]     = useState(false);
-  const [outreachCampaignId,  setOutreachCampaignId]  = useState(null);
   const [outreachSuccess,     setOutreachSuccess]     = useState(false);
-  const [outreachOptionA,     setOutreachOptionA]     = useState('');
-  const [outreachOptionB,     setOutreachOptionB]     = useState('');
-  const [outreachTone,        setOutreachTone]        = useState('option_a');
   const [chatEnlarged,        setChatEnlarged]        = useState(false);
+  const [approveLoading,      setApproveLoading]      = useState(false);
+  const [outreachError,        setOutreachError]       = useState('');
+
+  // States per channel
+  const [outreachTexts,       setOutreachTexts]       = useState({ whatsapp: '', email: '', sms: '' });
+  const [outreachOptionAs,    setOutreachOptionAs]    = useState({ whatsapp: '', email: '', sms: '' });
+  const [outreachOptionBs,    setOutreachOptionBs]    = useState({ whatsapp: '', email: '', sms: '' });
+  const [outreachCampaignIds, setOutreachCampaignIds] = useState({ whatsapp: null, email: null, sms: null });
+  const [outreachTones,       setOutreachTones]       = useState({ whatsapp: 'option_a', email: 'option_a', sms: 'option_a' });
 
   // Chat copilot
   const [chatOpen,     setChatOpen]     = useState(true);
@@ -298,150 +359,144 @@ export default function App() {
   const handleLogout = useCallback(() => {
     localStorage.removeItem('token');
     localStorage.removeItem('rmEmail');
-    clearCaches();
+    queryClient.clear();           // wipe all TanStack Query cache on logout
     setToken('');
     setCurrentRM(null);
-    setCustomers([]);
     setSelectedCustomer(null);
     setSelectedOpp(null);
-    setOpportunities([]);
-  }, []);
+  }, [queryClient]);
 
   // ---------------------------------------------------------------------------
-  // Fetch priority queue (cached on backend via Redis)
+  // TanStack Query — Priority Queue
   // ---------------------------------------------------------------------------
-  const fetchQueue = useCallback(async (tok = token) => {
-    if (!tok) return;
-    setQueueLoading(true);
-    try {
-      const res  = await fetch('/api/customers/priority-queue?limit=50', {
-        headers: { 'Authorization': `Bearer ${tok}` }
-      });
-      if (res.status === 401) { handleLogout(); return; }
-      const data = await res.json();
-      const custs = data.customers || [];
-      setCustomers(custs);
+  const {
+    data: queueData,
+    isLoading: queueLoading,
+    refetch: refetchQueue,
+  } = useQuery({
+    queryKey: ['queue', currentRM?.email],
+    queryFn: () => apiFetch('/api/customers/priority-queue?limit=50', token),
+    enabled: !!token && !!currentRM,
+    staleTime: 5 * 60 * 1000,
+    onError: (err) => { if (err.status === 401) handleLogout(); },
+  });
 
-      if (custs.length > 0) {
-        const total = custs.length;
-        const high  = custs.filter(c => c.risk_tier?.toLowerCase() === 'high').length;
-        const low   = custs.filter(c => c.risk_tier?.toLowerCase() === 'low').length;
-        const avgC  = Math.round(custs.reduce((acc, c) => acc + (c.credit_score || 0), 0) / total);
-        setDigestData({
-          totalCustomers: total,
-          highRisk: high,
-          lowRisk: low,
-          avgCibil: avgC || 750,
-          heldProducts: custs.reduce((acc, c) => acc + (c.behavioral_tags?.length || 0), 0)
-        });
-      }
-    } catch (err) {
-      console.error('Failed to fetch queue:', err);
-    } finally {
-      setQueueLoading(false);
+  const customers = useMemo(() => queueData?.customers || [], [queueData]);
+
+  // Digest data derived from queue
+  const digestData = useMemo(() => {
+    if (!customers.length) return { totalCustomers: 0, highRisk: 0, lowRisk: 0, avgCibil: 750, heldProducts: 0 };
+    const total = customers.length;
+    const high  = customers.filter(c => c.risk_tier?.toLowerCase() === 'high').length;
+    const low   = customers.filter(c => c.risk_tier?.toLowerCase() === 'low').length;
+    const avgC  = Math.round(customers.reduce((acc, c) => acc + (c.credit_score || 0), 0) / total);
+    return {
+      totalCustomers: total,
+      highRisk: high,
+      lowRisk: low,
+      avgCibil: avgC || 750,
+      heldProducts: customers.reduce((acc, c) => acc + (c.behavioral_tags?.length || 0), 0),
+    };
+  }, [customers]);
+
+  // ---------------------------------------------------------------------------
+  // TanStack Query — Customer Profile (auto-fetches when selectedCustomer changes)
+  // ---------------------------------------------------------------------------
+  const selectedCustomerId = selectedCustomer?.customer_id;
+
+  const {
+    data: profileData,
+    isLoading: detailLoading,
+  } = useQuery({
+    queryKey: ['profile', selectedCustomerId],
+    queryFn: () => apiFetch(`/api/customers/${selectedCustomerId}`, token),
+    enabled: !!token && !!selectedCustomerId,
+    staleTime: 10 * 60 * 1000,
+    onError: (err) => { if (err.status === 401) handleLogout(); },
+  });
+
+  // Merge queue-level data with full profile (so name/risk show immediately)
+  const mergedCustomer = useMemo(() => {
+    if (!selectedCustomer) return null;
+    return profileData ? { ...selectedCustomer, ...profileData } : selectedCustomer;
+  }, [selectedCustomer, profileData]);
+
+  // ---------------------------------------------------------------------------
+  // TanStack Query — Opportunities
+  // ---------------------------------------------------------------------------
+  const {
+    data: oppsData,
+    isLoading: oppsLoading,
+  } = useQuery({
+    queryKey: ['opps', selectedCustomerId],
+    queryFn: () => apiFetch(`/api/customers/${selectedCustomerId}/opportunities`, token),
+    enabled: !!token && !!selectedCustomerId,
+    staleTime: 5 * 60 * 1000,
+    onError: (err) => { if (err.status === 401) handleLogout(); },
+  });
+
+  const opportunities = useMemo(() => oppsData?.opportunities || [], [oppsData]);
+
+  // Auto-select first opportunity when customer or opps change
+  useEffect(() => {
+    if (opportunities.length > 0 && !selectedOpp) {
+      setSelectedOpp(opportunities[0]);
     }
-  }, [token, handleLogout]);
+  }, [opportunities]);
 
-  // ---------------------------------------------------------------------------
-  // Load customer details — with in-memory cache + parallel fetching
-  // ---------------------------------------------------------------------------
-  const loadCustomerDetails = useCallback(async (cust) => {
-    // 1. Optimistic update: show what we already know from the queue
+  // Selecting a customer — just set it; queries fire automatically
+  const loadCustomerDetails = useCallback((cust) => {
     setSelectedCustomer(cust);
     setSelectedOpp(null);
 
-    const id = cust.customer_id;
-
-    // 2. Check cache first
-    const cachedProfile = profileCache.get(id);
-    const cachedOpps    = oppsCache.get(id);
-
-    if (cachedProfile && cachedOpps) {
-      // Instant render from cache — no loading state needed
-      setSelectedCustomer(cachedProfile);
-      setOpportunities(cachedOpps);
-      if (cachedOpps.length > 0) setSelectedOpp(cachedOpps[0]);
-      return;
-    }
-
-    // 3. Parallel fetch profile + opportunities
-    setOppsLoading(true);
-    setDetailLoading(true);
-
-    try {
-      const headers = { 'Authorization': `Bearer ${token}` };
-
-      const [profileRes, oppsRes] = await Promise.all([
-        cachedProfile ? null : fetch(`/api/customers/${id}`, { headers }),
-        cachedOpps    ? null : fetch(`/api/customers/${id}/opportunities`, { headers })
-      ]);
-
-      // Profile
-      let profile = cachedProfile;
-      if (profileRes) {
-        if (profileRes.status === 401) { handleLogout(); return; }
-        profile = await profileRes.json();
-        profileCache.set(id, { ...cust, ...profile }); // merge with queue data
-      }
-
-      // Opportunities
-      let opps = cachedOpps;
-      if (oppsRes) {
-        const oppsData = await oppsRes.json();
-        opps = oppsData.opportunities || [];
-        oppsCache.set(id, opps);
-      }
-
-      setSelectedCustomer(prev => ({ ...prev, ...profile }));
-      setOpportunities(opps);
-      if (opps.length > 0) setSelectedOpp(opps[0]);
-    } catch (err) {
-      console.error('Failed to load customer details:', err);
-    } finally {
-      setDetailLoading(false);
-      setOppsLoading(false);
-    }
-  }, [token, handleLogout]);
-
-  // ---------------------------------------------------------------------------
-  // Fetch catered campaigns (catered portfolio) — with in-memory cache
-  // ---------------------------------------------------------------------------
-  const cateredLoadedRef = useRef(false);
-
-  const fetchCateredCampaigns = useCallback(async (forceRefresh = false) => {
-    if (!token) return;
-
-    // Skip API call if we already have data and it's not a force refresh
-    if (!forceRefresh && cateredLoadedRef.current && cateredCampaigns.length > 0) {
-      return;
-    }
-
-    setCateredLoading(true);
-    try {
-      const res = await fetch('/api/outreach', {
-        headers: { 'Authorization': `Bearer ${token}` }
+    // Prefetch next 3 customers in the visible list so clicking them is instant
+    const idx = customers.findIndex(c => c.customer_id === cust.customer_id);
+    customers.slice(idx + 1, idx + 4).forEach(next => {
+      queryClient.prefetchQuery({
+        queryKey: ['profile', next.customer_id],
+        queryFn: () => apiFetch(`/api/customers/${next.customer_id}`, token),
+        staleTime: 10 * 60 * 1000,
       });
-      if (res.status === 401) { handleLogout(); return; }
-      if (!res.ok) throw new Error('Failed to fetch catered portfolio');
-      const data = await res.json();
-      const campaignsList = data.campaigns || [];
-      setCateredCampaigns(campaignsList);
-      cateredLoadedRef.current = true;
-      if (campaignsList.length > 0 && (forceRefresh || !selectedCampaign)) {
-        setSelectedCampaign(campaignsList[0]);
-      }
-    } catch (err) {
-      console.error('Failed to fetch catered campaigns:', err);
-    } finally {
-      setCateredLoading(false);
-    }
-  }, [token, handleLogout, selectedCampaign, cateredCampaigns.length]);
+      queryClient.prefetchQuery({
+        queryKey: ['opps', next.customer_id],
+        queryFn: () => apiFetch(`/api/customers/${next.customer_id}/opportunities`, token),
+        staleTime: 5 * 60 * 1000,
+      });
+    });
+  }, [customers, token, queryClient]);
 
+  // Convenience alias for triggering a queue refresh (used by Trigger Scan)
+  const fetchQueue = useCallback(() => refetchQueue(), [refetchQueue]);
+
+  // ---------------------------------------------------------------------------
+  // TanStack Query — Catered Campaigns
+  // ---------------------------------------------------------------------------
+  const {
+    data: cateredData,
+    isLoading: cateredLoading,
+    refetch: refetchCatered,
+  } = useQuery({
+    queryKey: ['campaigns', currentRM?.email],
+    queryFn: () => apiFetch('/api/outreach', token),
+    enabled: !!token && !!currentRM,
+    staleTime: 1000,
+    refetchInterval: 3000,
+    onError: (err) => { if (err.status === 401) handleLogout(); },
+  });
+
+  const cateredCampaigns = useMemo(() => cateredData?.campaigns || [], [cateredData]);
+
+  const activeCampaign = useMemo(() => {
+    if (!selectedCampaign) return null;
+    return cateredCampaigns.find(c => c.campaign_id === selectedCampaign.campaign_id) || selectedCampaign;
+  }, [cateredCampaigns, selectedCampaign]);
+
+  // Auto-select first campaign
   useEffect(() => {
-    if (view === 'catered' && !cateredLoadedRef.current) {
-      fetchCateredCampaigns();
+    if (cateredCampaigns.length > 0 && !selectedCampaign) {
+      setSelectedCampaign(cateredCampaigns[0]);
     }
-  }, [view, fetchCateredCampaigns]);
+  }, [cateredCampaigns]);
 
   const handleViewProfileFromCampaign = useCallback((campaign) => {
     const cust = customers.find(c => c.customer_id === campaign.customer_id);
@@ -501,28 +556,40 @@ export default function App() {
   }, [cateredCampaigns, cateredSearch, cateredStatusFilter]);
 
   // ---------------------------------------------------------------------------
-  // Dismiss opportunity
+  // Dismiss opportunity — optimistic update via TanStack Mutation
   // ---------------------------------------------------------------------------
-  const handleDismissOpportunity = useCallback(async (oppId) => {
+  const dismissMutation = useMutation({
+    mutationFn: (oppId) => apiFetch(
+      `/api/customers/${selectedCustomerId}/opportunities/${oppId}/dismiss`,
+      token,
+      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reason: 'RM manual dismiss from dashboard' }) }
+    ),
+    onMutate: async (oppId) => {
+      // Cancel in-flight queries so they don't overwrite optimistic update
+      await queryClient.cancelQueries({ queryKey: ['opps', selectedCustomerId] });
+      const previous = queryClient.getQueryData(['opps', selectedCustomerId]);
+      // Optimistically remove dismissed opportunity from UI instantly
+      queryClient.setQueryData(['opps', selectedCustomerId], old => ({
+        ...old,
+        opportunities: old?.opportunities?.filter(o => o.opportunity_id !== oppId) ?? [],
+      }));
+      if (selectedOpp?.opportunity_id === oppId) setSelectedOpp(null);
+      return { previous };
+    },
+    onError: (_err, _oppId, context) => {
+      // Roll back optimistic update on failure
+      queryClient.setQueryData(['opps', selectedCustomerId], context.previous);
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ['opps', selectedCustomerId] });
+      queryClient.invalidateQueries({ queryKey: ['queue', currentRM?.email] });
+    },
+  });
+
+  const handleDismissOpportunity = useCallback((oppId) => {
     if (!window.confirm('Dismiss this opportunity?')) return;
-    try {
-      const res = await fetch(
-        `/api/customers/${selectedCustomer.customer_id}/opportunities/${oppId}/dismiss`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-          body: JSON.stringify({ reason: 'RM manual dismiss from dashboard' })
-        }
-      );
-      if (res.ok) {
-        const newOpps = opportunities.filter(o => o.opportunity_id !== oppId);
-        setOpportunities(newOpps);
-        oppsCache.set(selectedCustomer.customer_id, newOpps); // update cache
-        if (selectedOpp?.opportunity_id === oppId) setSelectedOpp(null);
-        fetchQueue();
-      }
-    } catch (err) { console.error(err); }
-  }, [selectedCustomer, opportunities, selectedOpp, token, fetchQueue]);
+    dismissMutation.mutate(oppId);
+  }, [dismissMutation]);
 
   // ---------------------------------------------------------------------------
   // Explain opportunity
@@ -558,76 +625,227 @@ export default function App() {
     }
   }, []);
 
+
   // ---------------------------------------------------------------------------
-  // Generate outreach
+  // Generate outreach — streaming SSE (tokens appear live in the editor)
   // ---------------------------------------------------------------------------
+  const outreachAbortRef = useRef(null);
+  const rawAccumRef = useRef({ whatsapp: '', email: '', sms: '' });
+
   const handleGenerateOutreach = useCallback(async (opp, channel) => {
+    if (!opp) return;
+    setSelectedOpp(opp);
+
+    // Abort any in-flight SSE connection
+    if (outreachAbortRef.current) {
+      outreachAbortRef.current.abort();
+    }
+
+    const cacheKey = opp.opportunity_id;
+    const cache = getCachedDrafts();
+    const cached = cache[cacheKey];
+    const currentFingerprint = getOppFingerprint(opp);
+
+    if (cached && cached.fingerprint === currentFingerprint) {
+      setOutreachError('');
+      setOutreachLoading(false);
+      setOutreachSuccess(false);
+      setOutreachChannel(channel);
+      setOutreachTexts(cached.texts);
+      setOutreachOptionAs(cached.optionAs);
+      setOutreachOptionBs(cached.optionBs);
+      setOutreachCampaignIds(cached.campaignIds);
+      setOutreachTones(cached.tones);
+      setShowOutreachModal(true);
+      return;
+    }
+
+    const controller = new AbortController();
+    outreachAbortRef.current = controller;
+
+    setOutreachError('');
     setOutreachLoading(true);
     setOutreachSuccess(false);
     setOutreachChannel(channel);
-    setOutreachTone('option_a');
+    
+    // Reset all channels
+    setOutreachTexts({ whatsapp: '', email: '', sms: '' });
+    setOutreachOptionAs({ whatsapp: '', email: '', sms: '' });
+    setOutreachOptionBs({ whatsapp: '', email: '', sms: '' });
+    setOutreachCampaignIds({ whatsapp: null, email: null, sms: null });
+    setOutreachTones({ whatsapp: 'option_a', email: 'option_a', sms: 'option_a' });
+    
+    rawAccumRef.current = { whatsapp: '', email: '', sms: '' };
     setShowOutreachModal(true);
+
     try {
-      const res = await fetch('/api/outreach/generate', {
+      const res = await fetch('/api/outreach/generate/stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
         body: JSON.stringify({
           customer_id:    selectedCustomer.customer_id,
           opportunity_id: opp.opportunity_id,
-          channel
-        })
+          channel,
+        }),
+        signal: controller.signal,
       });
-      const data = await res.json();
-      const optA = data.message_option_a || data.message_body || '';
-      const optB = data.message_option_b || data.message_body || '';
-      setOutreachOptionA(optA);
-      setOutreachOptionB(optB);
-      setOutreachText(optA);
-      setOutreachCampaignId(data.campaign_id);
-    } catch {
-      setOutreachText('Failed to generate draft. Please verify LLM connectivity.');
-      setOutreachOptionA('');
-      setOutreachOptionB('');
+
+      if (!res.ok) {
+        throw new Error(`API error ${res.status}`);
+      }
+
+      setOutreachLoading(false);
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop();
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          try {
+            const evt = JSON.parse(line.slice(6));
+            if (evt.type === 'token') {
+              const ch = evt.channel;
+              rawAccumRef.current[ch] += evt.token;
+              
+              const cleanA = parseStreamingOption(rawAccumRef.current[ch], 'option_a');
+              if (cleanA) {
+                setOutreachTexts(prev => ({ ...prev, [ch]: cleanA }));
+              } else {
+                setOutreachTexts(prev => ({ ...prev, [ch]: 'Drafting message...' }));
+              }
+            } else if (evt.type === 'done') {
+              const ch = evt.channel;
+              const finalA = evt.option_a || rawAccumRef.current[ch];
+              const finalB = evt.option_b || rawAccumRef.current[ch];
+              const finalCampaignId = evt.campaign_id;
+
+              setOutreachOptionAs(prev => ({ ...prev, [ch]: finalA }));
+              setOutreachOptionBs(prev => ({ ...prev, [ch]: finalB }));
+              setOutreachTexts(prev => ({ ...prev, [ch]: finalA }));
+              setOutreachCampaignIds(prev => ({ ...prev, [ch]: finalCampaignId }));
+
+              // Store to cache
+              const currentCache = getCachedDrafts();
+              if (!currentCache[cacheKey]) {
+                currentCache[cacheKey] = {
+                  fingerprint: getOppFingerprint(opp),
+                  texts: { whatsapp: '', email: '', sms: '' },
+                  optionAs: { whatsapp: '', email: '', sms: '' },
+                  optionBs: { whatsapp: '', email: '', sms: '' },
+                  campaignIds: { whatsapp: null, email: null, sms: null },
+                  tones: { whatsapp: 'option_a', email: 'option_a', sms: 'option_a' }
+                };
+              }
+              currentCache[cacheKey].texts[ch] = finalA;
+              currentCache[cacheKey].optionAs[ch] = finalA;
+              currentCache[cacheKey].optionBs[ch] = finalB;
+              currentCache[cacheKey].campaignIds[ch] = finalCampaignId;
+              currentCache[cacheKey].tones[ch] = 'option_a';
+              saveCachedDrafts(currentCache);
+            } else if (evt.type === 'error') {
+              const ch = evt.channel || 'whatsapp';
+              setOutreachTexts(prev => ({ ...prev, [ch]: 'Generation failed: ' + evt.message }));
+            }
+          } catch { /* skip */ }
+        }
+      }
+    } catch (err) {
+      if (err.name !== 'AbortError') {
+        setOutreachTexts({
+          whatsapp: 'Failed to generate drafts. Please verify LLM connectivity.',
+          email: 'Failed to generate drafts. Please verify LLM connectivity.',
+          sms: 'Failed to generate drafts. Please verify LLM connectivity.'
+        });
+      }
     } finally {
       setOutreachLoading(false);
     }
   }, [selectedCustomer, token]);
 
   const handleToneChange = useCallback((tone) => {
-    setOutreachTone(tone);
-    if (tone === 'option_a') {
-      setOutreachText(outreachOptionA);
-    } else {
-      setOutreachText(outreachOptionB);
+    setOutreachTones(prev => ({ ...prev, [outreachChannel]: tone }));
+    const optA = outreachOptionAs[outreachChannel];
+    const optB = outreachOptionBs[outreachChannel];
+    const text = tone === 'option_a' ? optA : optB;
+    setOutreachTexts(prev => ({ ...prev, [outreachChannel]: text }));
+
+    if (selectedOpp) {
+      const cacheKey = selectedOpp.opportunity_id;
+      const cache = getCachedDrafts();
+      if (cache[cacheKey]) {
+        cache[cacheKey].tones[outreachChannel] = tone;
+        cache[cacheKey].texts[outreachChannel] = text;
+        saveCachedDrafts(cache);
+      }
     }
-  }, [outreachOptionA, outreachOptionB]);
+  }, [outreachOptionAs, outreachOptionBs, selectedOpp, outreachChannel]);
 
   const handleTextChange = useCallback((text) => {
-    setOutreachText(text);
-    if (outreachTone === 'option_a') {
-      setOutreachOptionA(text);
+    setOutreachTexts(prev => ({ ...prev, [outreachChannel]: text }));
+    let optA = outreachOptionAs[outreachChannel];
+    let optB = outreachOptionBs[outreachChannel];
+    if (outreachTones[outreachChannel] === 'option_a') {
+      optA = text;
+      setOutreachOptionAs(prev => ({ ...prev, [outreachChannel]: text }));
     } else {
-      setOutreachOptionB(text);
+      optB = text;
+      setOutreachOptionBs(prev => ({ ...prev, [outreachChannel]: text }));
     }
-  }, [outreachTone, outreachOptionA, outreachOptionB]);
+
+    if (selectedOpp) {
+      const cacheKey = selectedOpp.opportunity_id;
+      const cache = getCachedDrafts();
+      if (cache[cacheKey]) {
+        cache[cacheKey].texts[outreachChannel] = text;
+        cache[cacheKey].optionAs[outreachChannel] = optA;
+        cache[cacheKey].optionBs[outreachChannel] = optB;
+        saveCachedDrafts(cache);
+      }
+    }
+  }, [outreachTones, outreachOptionAs, outreachOptionBs, selectedOpp, outreachChannel]);
 
   const handleApproveOutreach = useCallback(async () => {
-    if (!outreachCampaignId) return;
-    setOutreachLoading(true);
+    const campaignId = outreachCampaignIds[outreachChannel];
+    if (!campaignId) return;
+    setApproveLoading(true);
+    setOutreachError('');
     try {
-      const res = await fetch(`/api/outreach/${outreachCampaignId}/approve`, {
+      const res = await fetch(`/api/outreach/${campaignId}/approve`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify({ edited_message: outreachText })
+        body: JSON.stringify({ edited_message: outreachTexts[outreachChannel] })
       });
       if (res.ok) {
         setOutreachSuccess(true);
-        cateredLoadedRef.current = false; // invalidate cache so Catered Portfolio refreshes
-        setTimeout(() => { setShowOutreachModal(false); setOutreachSuccess(false); }, 400);
+        // Clear cached draft upon successful dispatch
+        if (selectedOpp) {
+          const cacheKey = selectedOpp.opportunity_id;
+          const cache = getCachedDrafts();
+          delete cache[cacheKey];
+          saveCachedDrafts(cache);
+        }
+        // Invalidate catered campaigns cache so Catered Portfolio tab refreshes
+        queryClient.invalidateQueries({ queryKey: ['campaigns', currentRM?.email] });
+        setTimeout(() => { setShowOutreachModal(false); setOutreachSuccess(false); }, 1000);
+      } else {
+        const errorData = await res.json().catch(() => ({}));
+        setOutreachError(errorData.detail || `Server returned ${res.status}`);
       }
-    } catch (err) { console.error(err); }
-    finally { setOutreachLoading(false); }
-  }, [outreachCampaignId, outreachText, token]);
+    } catch (err) {
+      console.error(err);
+      setOutreachError(err.message || 'Network error occurred during dispatch');
+    }
+    finally { setApproveLoading(false); }
+  }, [outreachCampaignIds, outreachTexts, token, queryClient, currentRM?.email, selectedOpp, outreachChannel]);
 
   // ---------------------------------------------------------------------------
   // Chat — fixed SSE streaming with ref-based accumulation
@@ -740,16 +958,16 @@ export default function App() {
   }, [chatInput, chatStreaming, token, chatSessionId, selectedCustomer]);
 
   // ---------------------------------------------------------------------------
-  // Trigger scan
+  // Trigger scan — invalidates queue cache and refetches
   // ---------------------------------------------------------------------------
   const triggerSystemScan = useCallback(async () => {
     setScanning(true);
     try {
-      // Bust queue cache by clearing customer section
-      await fetchQueue();
+      await queryClient.invalidateQueries({ queryKey: ['queue', currentRM?.email] });
+      await refetchQueue();
     } catch (e) { console.error(e); }
     finally { setScanning(false); }
-  }, [fetchQueue]);
+  }, [queryClient, currentRM?.email, refetchQueue]);
 
   // ---------------------------------------------------------------------------
   // Filtered customers (memoized)
@@ -786,9 +1004,9 @@ export default function App() {
 
   useEffect(() => {
     checkHealth();
-    if (token) fetchQueue(token);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token]);
+    // TanStack Query handles fetching automatically via `enabled` flag.
+    // No manual fetchQueue() / fetchCateredCampaigns() needed here.
+  }, [token, checkHealth]);
 
   useEffect(() => {
     if (chatBottomRef.current) {
@@ -1054,7 +1272,7 @@ export default function App() {
               {selectedCustomer ? (
                 <div className="detailed-info scrollable" style={{ paddingBottom: '80px' }}>
                   <div className="info-header glass-panel">
-                    {detailLoading ? (
+                    {detailLoading && !profileData ? (
                       <div className="loading-spinner">
                         <Loader2 className="animate-spin text-accent" size={28} />
                         <p>Loading profile...</p>
@@ -1062,24 +1280,24 @@ export default function App() {
                     ) : (
                       <>
                         <div className="avatar-big"><User size={32} /></div>
-                        <h2>{selectedCustomer.name}</h2>
-                        <p className="text-muted">{selectedCustomer.email} | {selectedCustomer.phone}</p>
+                        <h2>{mergedCustomer?.name}</h2>
+                        <p className="text-muted">{mergedCustomer?.email} | {mergedCustomer?.phone}</p>
                         <div className="grid grid-cols-2 gap-4 w-full mt-6">
                           <div className="metric-box">
                             <span className="label">Monthly Salary</span>
-                            <span className="value">₹{selectedCustomer.salary_avg_3m?.toLocaleString() || 'N/A'}</span>
+                            <span className="value">₹{mergedCustomer?.salary_avg_3m?.toLocaleString() || 'N/A'}</span>
                           </div>
                           <div className="metric-box">
                             <span className="label">Total Investments</span>
-                            <span className="value">₹{selectedCustomer.total_investments?.toLocaleString() || 'N/A'}</span>
+                            <span className="value">₹{mergedCustomer?.total_investments?.toLocaleString() || 'N/A'}</span>
                           </div>
                           <div className="metric-box">
                             <span className="label">Total Liabilities</span>
-                            <span className="value text-red">₹{selectedCustomer.total_liabilities?.toLocaleString() || 'N/A'}</span>
+                            <span className="value text-red">₹{mergedCustomer?.total_liabilities?.toLocaleString() || 'N/A'}</span>
                           </div>
                           <div className="metric-box">
                             <span className="label">KYC Status</span>
-                            <span className="value text-green">{selectedCustomer.kyc_status}</span>
+                            <span className="value text-green">{mergedCustomer?.kyc_status}</span>
                           </div>
                         </div>
                       </>
@@ -1223,27 +1441,27 @@ export default function App() {
 
             {/* Right Panel - Campaign Detail */}
             <div className="catered-detail-panel glass-panel">
-              {selectedCampaign ? (
+              {activeCampaign ? (
                 <div className="campaign-detail-content">
                   <div className="detail-header">
                     <div>
-                      <h2>{selectedCampaign.customer_name}</h2>
+                      <h2>{activeCampaign.customer_name}</h2>
                       <p className="detail-subtitle">
-                        Recommended: <strong className="text-accent">{selectedCampaign.product_recommended}</strong> 
-                        &nbsp;&bull;&nbsp; Channel: <span className="channel-badge capitalize">{selectedCampaign.channel}</span>
+                        Recommended: <strong className="text-accent">{activeCampaign.product_recommended}</strong> 
+                        &nbsp;&bull;&nbsp; Channel: <span className="channel-badge capitalize">{activeCampaign.channel}</span>
                       </p>
                     </div>
                     <div className="detail-header-actions">
                       <button 
                         className="btn-secondary flex items-center gap-1"
-                        onClick={() => handleViewProfileFromCampaign(selectedCampaign)}
+                        onClick={() => handleViewProfileFromCampaign(activeCampaign)}
                       >
                         <ExternalLink size={14} />
                         <span>View Profile</span>
                       </button>
                       <button 
                         className="btn-accent flex items-center gap-1"
-                        onClick={() => handleReEngageFromCampaign(selectedCampaign)}
+                        onClick={() => handleReEngageFromCampaign(activeCampaign)}
                       >
                         <MessageSquare size={14} />
                         <span>Re-engage</span>
@@ -1256,8 +1474,8 @@ export default function App() {
                     <h4>Delivery Funnel</h4>
                     <div className="funnel-timeline">
                       {['created', 'sent', 'delivered', 'opened', 'converted'].map((step, idx) => {
-                        const stepActive = isFunnelStepActive(selectedCampaign, step);
-                        const stepDate = getFunnelStepDate(selectedCampaign, step);
+                        const stepActive = isFunnelStepActive(activeCampaign, step);
+                        const stepDate = getFunnelStepDate(activeCampaign, step);
                         return (
                           <div key={step} className={`funnel-step ${stepActive ? 'active' : ''}`}>
                             <div className="step-marker">
@@ -1280,7 +1498,7 @@ export default function App() {
                       <h4>Dispatched Message</h4>
                       <button 
                         className="btn-copy" 
-                        onClick={() => handleCopyMessage(selectedCampaign.message_body)}
+                        onClick={() => handleCopyMessage(activeCampaign.message_body)}
                         title="Copy to clipboard"
                       >
                         <Copy size={16} />
@@ -1288,7 +1506,7 @@ export default function App() {
                       </button>
                     </div>
                     <div className="message-preview-body">
-                      {selectedCampaign.message_body}
+                      {activeCampaign.message_body}
                     </div>
                   </div>
                 </div>
@@ -1609,12 +1827,7 @@ export default function App() {
               <button className="icon-btn" onClick={() => setShowOutreachModal(false)}><X size={20} /></button>
             </div>
             <div className="modal-body">
-              {outreachLoading ? (
-                <div className="loading-spinner">
-                  <Loader2 className="animate-spin text-accent" size={32} />
-                  <p>Invoking LLM OutreachGenAgent (RAG + tone playbooks)...</p>
-                </div>
-              ) : outreachSuccess ? (
+              {outreachSuccess ? (
                 <div className="success-state">
                   <CheckCircle2 size={48} className="text-green animate-bounce" />
                   <h4>Outreach Dispatched!</h4>
@@ -1622,53 +1835,104 @@ export default function App() {
                 </div>
               ) : (
                 <div className="outreach-editor">
+                  {outreachError && (
+                    <div className="error-alert mb-4">
+                      <AlertCircle size={16} />
+                      <span>{outreachError}</span>
+                    </div>
+                  )}
+
+                  {/* Channel tabs — disabled while streaming */}
                   <div className="channel-tabs mb-4">
                     {['whatsapp', 'email', 'sms'].map(ch => (
-                      <button key={ch} className={`tab ${outreachChannel === ch ? 'active' : ''}`} onClick={() => handleGenerateOutreach(selectedOpp, ch)}>
+                      <button
+                        key={ch}
+                        className={`tab ${outreachChannel === ch ? 'active' : ''}`}
+                        onClick={() => setOutreachChannel(ch)}
+                      >
                         {ch.toUpperCase()}
                       </button>
                     ))}
                   </div>
 
-                  {/* A/B Tone Selector */}
-                  <div className="tone-selector-container mb-4">
-                    <span className="text-muted text-xs block mb-1.5 font-semibold tracking-wider uppercase">Tone Variations</span>
-                    <div className="flex gap-2">
-                      <button 
-                        type="button" 
-                        className={`tab ${outreachTone === 'option_a' ? 'active' : ''}`} 
-                        onClick={() => handleToneChange('option_a')}
-                      >
-                        Direct &amp; Professional
-                      </button>
-                      <button 
-                        type="button" 
-                        className={`tab ${outreachTone === 'option_b' ? 'active' : ''}`} 
-                        onClick={() => handleToneChange('option_b')}
-                      >
-                        Conversational &amp; Advisory
-                      </button>
+                  {/* A/B Tone Selector — shown only after generation done */}
+                  {outreachCampaignIds[outreachChannel] && (
+                    <div className="tone-selector-container mb-4">
+                      <span className="text-muted text-xs block mb-1.5 font-semibold tracking-wider uppercase">Tone Variations</span>
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          className={`tab ${outreachTones[outreachChannel] === 'option_a' ? 'active' : ''}`}
+                          onClick={() => handleToneChange('option_a')}
+                        >
+                          Direct &amp; Professional
+                        </button>
+                        <button
+                          type="button"
+                          className={`tab ${outreachTones[outreachChannel] === 'option_b' ? 'active' : ''}`}
+                          onClick={() => handleToneChange('option_b')}
+                        >
+                          Conversational &amp; Advisory
+                        </button>
+                      </div>
                     </div>
-                  </div>
+                  )}
 
                   <div className="editor-group">
-                    <label>Message Content (Editable)</label>
-                    <textarea value={outreachText} onChange={e => handleTextChange(e.target.value)} rows={10} />
-                  </div>
-                  <div className="limit-warnings mt-4">
-                    <div className="info-row">
-                      <Shield size={14} className="text-accent" />
-                      <span>Compliance Check: Opted in. Send limits are within boundaries.</span>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      Message Content (Editable)
+                      {outreachLoading && (
+                        <span style={{ display:'inline-flex', alignItems:'center', gap:6, fontSize:12, color:'var(--accent)' }}>
+                          <Loader2 size={13} className="animate-spin" />
+                          Generating...
+                        </span>
+                      )}
+                    </label>
+                    <div style={{ position: 'relative' }}>
+                      <textarea
+                        value={outreachTexts[outreachChannel]}
+                        onChange={e => handleTextChange(e.target.value)}
+                        rows={10}
+                        readOnly={outreachLoading}
+                        style={outreachLoading ? { caretColor: 'transparent' } : {}}
+                      />
+                      {/* blinking cursor while streaming */}
+                      {outreachLoading && outreachTexts[outreachChannel] && (
+                        <span style={{
+                          position:'absolute', bottom:12, right:14,
+                          width:2, height:16, background:'var(--accent)',
+                          borderRadius:1, display:'inline-block',
+                          animation:'blink-cursor 1s step-end infinite'
+                        }} />
+                      )}
                     </div>
                   </div>
+                  {!outreachLoading && (
+                    <div className="limit-warnings mt-4">
+                      <div className="info-row">
+                        <Shield size={14} className="text-accent" />
+                        <span>Compliance Check: Opted in. Send limits are within boundaries.</span>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
-            {!outreachSuccess && !outreachLoading && (
+            {!outreachSuccess && (
               <div className="modal-footer">
-                <button className="btn-secondary" onClick={() => setShowOutreachModal(false)}>Cancel</button>
-                <button className="btn-glow" onClick={handleApproveOutreach}>
-                  <Check size={16} /><span>Approve &amp; Dispatch</span>
+                <button className="btn-secondary" onClick={() => setShowOutreachModal(false)} disabled={approveLoading}>Cancel</button>
+                <button
+                  className="btn-glow"
+                  onClick={handleApproveOutreach}
+                  disabled={outreachLoading || approveLoading || !outreachCampaignIds[outreachChannel]}
+                  title={outreachLoading ? 'Generating...' : approveLoading ? 'Dispatching...' : !outreachCampaignIds[outreachChannel] ? 'Waiting for draft...' : 'Approve & send'}
+                >
+                  {approveLoading
+                    ? <><Loader2 size={15} className="animate-spin" /><span>Dispatching...</span></>
+                    : outreachLoading && !outreachCampaignIds[outreachChannel]
+                      ? <><Loader2 size={15} className="animate-spin" /><span>Writing...</span></>
+                      : <><Check size={16} /><span>Approve &amp; Dispatch</span></>
+                  }
                 </button>
               </div>
             )}

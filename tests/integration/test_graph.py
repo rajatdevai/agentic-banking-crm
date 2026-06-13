@@ -127,7 +127,9 @@ async def test_full_pipeline_wedding_customer(db_session, mock_openai_call):
     # Run graph
     state = initial_state(
         customer_id=synthetic.customer_id,
+        customer_name="Test Customer",
         rm_id=synthetic.rm_id,
+        rm_name="Test RM",
         session_id=str(uuid.uuid4()),
         trace_id=str(uuid.uuid4()),
     )
@@ -206,7 +208,9 @@ async def test_no_events_customer_skips_llm(db_session):
 
     state = initial_state(
         customer_id=minimal.customer_id,
+        customer_name="Test Customer",
         rm_id=minimal.rm_id,
+        rm_name="Test RM",
         session_id=str(uuid.uuid4()),
         trace_id=str(uuid.uuid4()),
     )

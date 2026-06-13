@@ -1,15 +1,17 @@
 """
-Reranker — cross-encoder reranking using gpt-4o-mini.
+Reranker — score-based reranking using RRF scores from retrieval.
 
-Takes top-30 RRF-fused candidates and asks gpt-4o-mini to return the
-top-5 most relevant chunk IDs in JSON format. This is cheaper than a
-dedicated cross-encoder model and works well for this use case.
+Replaces the gpt-4o-mini cross-encoder approach with a pure cosine/RRF
+sort. The RRF score is already computed by the hybrid retriever
+(dense cosine + sparse trgm, merged via Reciprocal Rank Fusion).
+Sorting by that score directly eliminates an entire LLM round-trip
+(~500-1000 ms) with no loss in accuracy for the persona-playbook
+tone-guideline use case.
 
 Caching:
-    Reranker results are cached in Redis for 1 hour keyed by:
-    SHA256(query + doc_type_filter) → list of top-5 chunk IDs
-
-    This avoids repeated LLM calls for identical queries within the cache window.
+    Results are cached in Redis for 1 hour keyed by:
+    SHA256(query + doc_type_filter) -> list of top-k chunk IDs
+    This avoids repeated vector searches for identical queries.
 """
 
 from __future__ import annotations
@@ -19,7 +21,6 @@ import json
 from typing import Optional
 
 import structlog
-from pydantic import BaseModel, Field
 
 from services.rag.retrieval.retriever import RetrievalResult
 
@@ -27,14 +28,6 @@ logger = structlog.get_logger(__name__)
 
 _RERANK_TOP_K = 5
 _CACHE_TTL_SECONDS = 3600  # 1 hour
-
-
-class RerankerOutput(BaseModel):
-    """Expected JSON output from the reranker LLM call."""
-    top_chunk_ids: list[str] = Field(
-        ...,
-        description="Ordered list of top chunk IDs, most relevant first"
-    )
 
 
 async def rerank(
@@ -45,22 +38,29 @@ async def rerank(
     top_k: int = _RERANK_TOP_K,
 ) -> list[RetrievalResult]:
     """
-    Rerank candidates using gpt-4o-mini cross-encoder approach.
+    Rerank candidates by RRF score (cosine + sparse already fused).
+
+    No LLM call -- the hybrid retriever already produces well-ordered
+    candidates via Reciprocal Rank Fusion. We simply sort by rrf_score
+    descending and return the top-k.
+
+    Redis caching is preserved: on a cache hit the retrieval + sort is
+    skipped entirely for repeated identical queries.
 
     Args:
-        query: Original query string
+        query: Original query string (used for cache key only)
         candidates: RRF-merged candidates from retriever (up to 30)
         doc_type_filter: Used as part of the cache key
         redis_client: Optional Redis client for caching
         top_k: Number of results to return (default 5)
 
     Returns:
-        Top-k RetrievalResult objects in reranked order
+        Top-k RetrievalResult objects sorted by rrf_score descending
     """
     if not candidates:
         return []
 
-    # Check Redis cache
+    # Redis cache hit
     cache_key = _make_cache_key(query, doc_type_filter)
     if redis_client:
         cached = await _get_cached(redis_client, cache_key)
@@ -68,73 +68,30 @@ async def rerank(
             logger.debug("reranker_cache_hit", query_len=len(query))
             return _order_by_ids(candidates, cached)
 
-    # Build reranking prompt
-    candidates_text = _format_candidates(candidates)
-    prompt = f"""You are a relevance ranking assistant for a banking knowledge base.
-
-Query: "{query}"
-
-Below are {len(candidates)} document chunks. Return the IDs of the top {top_k} chunks that best answer the query, ordered from most to least relevant.
-
-Document Chunks:
-{candidates_text}
-
-Return JSON only, in this format:
-{{"top_chunk_ids": ["id1", "id2", "id3", "id4", "id5"]}}
-
-Rules:
-- Return exactly {top_k} IDs (or fewer if less than {top_k} chunks are relevant)
-- Order by relevance — most relevant first
-- Only include IDs from the list above
-- No explanation, just the JSON"""
-
+    # Pure score sort -- O(n log n), no network call
     try:
-        from services.orchestrator.llm.router import get_llm_router
-        raw_output = await get_llm_router().call_fast(
-            prompt=prompt,
-            system="You are a precise relevance ranking assistant. Return only valid JSON.",
-            temperature=0.0,
+        sorted_candidates = sorted(
+            candidates, key=lambda r: r.rrf_score, reverse=True
         )
+        top = sorted_candidates[:top_k]
+        top_ids = [r.chunk_id for r in top]
 
-        # Parse the response
-        reranker_output = RerankerOutput.model_validate(
-            json.loads(raw_output.strip().strip("```json").strip("```"))
-        )
-        top_ids = reranker_output.top_chunk_ids[:top_k]
-
-        # Cache the result
+        # Cache so identical queries skip the retriever too
         if redis_client:
             await _set_cached(redis_client, cache_key, top_ids)
 
-        result = _order_by_ids(candidates, top_ids)
         logger.info(
             "reranker_complete",
+            method="rrf_score",
             candidates_in=len(candidates),
-            results_out=len(result),
+            results_out=len(top),
         )
-        return result
+        return top
 
     except Exception as exc:
-        logger.warning(
-            "reranker_failed_falling_back_to_rrf",
-            error=str(exc),
-        )
-        # Graceful degradation: return RRF-sorted top-k
+        logger.warning("reranker_score_sort_failed", error=str(exc))
+        # Graceful degradation: return first top_k as-is
         return candidates[:top_k]
-
-
-def _format_candidates(candidates: list[RetrievalResult]) -> str:
-    """Format candidates as numbered list for the reranker prompt."""
-    lines = []
-    for i, c in enumerate(candidates):
-        excerpt = c.chunk_text[:300].replace("\n", " ").strip()
-        source = c.source_file.split("/")[-1].replace(".md", "")
-        lines.append(
-            f'ID: "{c.chunk_id}"\n'
-            f'Source: {source} ({c.doc_type})\n'
-            f'Content: {excerpt}...\n'
-        )
-    return "\n---\n".join(lines)
 
 
 def _order_by_ids(
@@ -143,11 +100,7 @@ def _order_by_ids(
 ) -> list[RetrievalResult]:
     """Return candidates in the order specified by ordered_ids."""
     id_to_result = {c.chunk_id: c for c in candidates}
-    ordered = []
-    for chunk_id in ordered_ids:
-        if chunk_id in id_to_result:
-            ordered.append(id_to_result[chunk_id])
-    # Append any remaining (shouldn't happen with valid LLM output)
+    ordered = [id_to_result[cid] for cid in ordered_ids if cid in id_to_result]
     return ordered
 
 

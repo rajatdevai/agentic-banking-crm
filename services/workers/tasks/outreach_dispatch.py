@@ -42,7 +42,7 @@ def dispatch_campaign(self, campaign_id: str):
 async def _dispatch_async(campaign_id: str) -> dict:
     """Async dispatch implementation with proper session lifecycle."""
     from sqlalchemy import select
-    from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+    from shared.db.session import AsyncSessionLocal
     from shared.db.models import OutreachCampaign, Opportunity, Customer
     from services.notifications.compliance import can_send, increment_rate_limit
     from services.notifications.providers.whatsapp import send_whatsapp
@@ -54,25 +54,9 @@ async def _dispatch_async(campaign_id: str) -> dict:
 
     settings = get_settings()
 
-    # asyncpg does not accept psycopg2-style query params like ?sslmode= or &channel_binding=
-    # Strip them and pass ssl=True directly as a connect_arg
-    import re
-    raw_url = settings.DATABASE_URL
-    # Remove sslmode and channel_binding query params
-    clean_url = re.sub(r'[?&]sslmode=[^&]*', '', raw_url)
-    clean_url = re.sub(r'[?&]channel_binding=[^&]*', '', clean_url)
-    # Remove any dangling ? or & at the end
-    clean_url = re.sub(r'[?&]+$', '', clean_url)
-
-    # Create a fresh engine + session scoped to this task — avoids lifecycle conflicts
-    engine = create_async_engine(
-        clean_url,
-        echo=False,
-        connect_args={"ssl": True} if "neon.tech" in clean_url or "sslmode" in raw_url else {},
-    )
     redis_client = await aioredis.from_url(settings.REDIS_URL, decode_responses=True)
 
-    async with AsyncSession(engine, expire_on_commit=False) as db:
+    async with AsyncSessionLocal() as db:
         try:
             # Step 1: Load campaign
             result = await db.execute(
@@ -197,5 +181,3 @@ async def _dispatch_async(campaign_id: str) -> dict:
             raise
         finally:
             await redis_client.aclose()
-
-    await engine.dispose()

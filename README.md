@@ -23,7 +23,7 @@ An AI-powered Relationship Manager Copilot that analyzes customer transaction da
 │                                                                              │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
 │   │  AgentState (TypedDict) — shared whiteboard, Redis-checkpointed     │   │
-│   └─────────────────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────────┘   │
 │                                                                              │
 │   [Customer Intel] ──┬── [Transaction Intel] ──┐                            │
 │                      └── [Event Detection]  ───┤                            │
@@ -62,7 +62,7 @@ An AI-powered Relationship Manager Copilot that analyzes customer transaction da
 
 ## Execution Flow
 
-The primary use case: *"Find high-value customers likely to convert for a personal loan this month and generate personalized WhatsApp messages."*
+The primary usecase: *"Find high-value customers likely to convert for a personal loan this month and generate personalized WhatsApp messages."*
 
 ```
 1. RM types query in Copilot UI
@@ -104,14 +104,14 @@ The primary use case: *"Find high-value customers likely to convert for a person
 | Agent | LLM? | Purpose |
 |-------|-------|---------|
 | Customer Intel | ❌ | DB reads for customer profile, persona, holdings |
-| Transaction Intel | ❌ | TimescaleDB aggregation — spend patterns, behavioral tags |
-| Event Detection | ❌ | Deterministic rule engine — MCC pattern → life event |
-| Risk Assessment | ❌ | Credit policy rules — CIBIL, FOIR, delinquency flags |
-| Opportunity Scoring | ❌ | XGBoost conversion_prob + composite priority score |
-| Product Recommendation | ❌+RAG | RAG eligibility lookup + rule-based validation |
-| Explainability | ✅ gpt-4o | Plain-English reasoning cards for RM dashboard |
-| Outreach Generation | ✅ gpt-4o | Personalized message drafting (customer name, RM name, context) via RAG + LLM |
-| RM Copilot | ✅ gpt-4o | Conversational Q&A, streaming, session memory |
+| Transaction Intel | ❌ | Spend pattern analysis, merchant category classifications, and behavioral tags |
+| Event Detection | ❌ | Deterministic rule engine matching transaction sequences to life events |
+| Risk Assessment | ❌ | Credit policy validation (CIBIL score check, FOIR, delinquency flags) |
+| Opportunity Scoring | ❌ | XGBoost conversion probability and priority scoring calculation |
+| Product Recommendation | ❌+RAG | Product eligibility verification against RAG knowledge base |
+| Explainability | ✅ gpt-4o | Plain-English reasoning summary cards for the RM dashboard |
+| Outreach Generation | ✅ gpt-4o | Personalized message template drafts based on RAG persona playbooks |
+| RM Copilot | ✅ gpt-4o | Interactive dashboard Q&A chatbot with streaming capability and memory |
 
 **Key design principle**: LLMs are used *only* for natural language generation tasks. All scoring, classification, and rule enforcement is deterministic — fully auditable and reproducible.
 
@@ -175,45 +175,13 @@ No agent calls another agent directly. All agents read from and write to a share
 
 ---
 
-## Trade-offs and Limitations
-
-| Decision | Trade-off | Why |
-|----------|-----------|-----|
-| pgvector over Qdrant | Lower vector query performance at very large scale | Operational simplicity; same Postgres cluster; clear upgrade path |
-| Celery over Kafka | Lower throughput ceiling | Right fit for current scale; Kafka adds ops complexity without benefit yet |
-| LLM only for NLG | Less flexible agent reasoning | Auditability and cost control outweigh flexibility for financial use case |
-| RM approval gate | Slower outreach | Risk management; RM must own every customer communication |
-| Single OpenAI provider | No LLM redundancy | Simplicity for demo; add fallback chain in production |
-| Heuristic scoring fallback | Less accurate during model downtime | Availability over accuracy — better to show a score than nothing |
-
-**Known limitations for the demo build**:
-- XGBoost model is trained on synthetic data (no real historical conversions)
-- CBS integration is mocked — real integration requires bank API credentials
-- WhatsApp uses Twilio Sandbox for demo (see setup instructions below); production requires Meta-approved number
-- SMS requires verified recipient numbers on Twilio trial accounts
-- No real-time WebSocket push implemented (SSE only for copilot streaming)
-
----
-
-## Demo Scenarios
-
-### Demo 1 — Priority Queue
-RM opens dashboard. System shows ranked list of customers with conversion probability and reasoning. RM asks: *"Show me HNI customers with wealth migration signals."* Copilot filters and explains.
-
-### Demo 2 — Event-Driven Outreach
-System detects wedding signals for 3 customers. Morning digest shows them ranked at 87%, 74%, 62% conversion probability. RM reviews generated WhatsApp messages, edits one, approves all. Dispatch queued.
-
-### Demo 3 — Conversational Copilot
-RM asks: *"Rahul hasn't responded to two messages, what should I try next?"* Copilot retrieves Rahul's profile, outreach history, and persona playbook via RAG. Suggests email with different angle. RM approves new message.
-
----
-
 ## Setup and Run Instructions
 
 ### Prerequisites
-- Docker and Docker Compose
 - Python 3.11+
 - Poetry (`pip install poetry`)
+- Redis (standard service or executable)
+- PostgreSQL (or Neon serverless instance)
 - OpenAI API key
 
 ### 1. Clone and configure environment
@@ -221,94 +189,137 @@ RM asks: *"Rahul hasn't responded to two messages, what should I try next?"* Cop
 git clone <repo-url>
 cd rm-copilot
 cp .env.example .env
-# Edit .env — set OPENAI_API_KEY and other required values
+# Edit .env — set DATABASE_URL, REDIS_URL, OPENAI_API_KEY, and Twilio credentials
 ```
 
-### 2. Start infrastructure
-```bash
-cd infra/docker
-docker-compose up postgres redis -d
-# Wait for healthchecks to pass
-```
-
-### 3. Install dependencies
+### 2. Install dependencies
 ```bash
 poetry install
 ```
 
-### 4. Run database migrations
+### 3. Run database migrations
 ```bash
 poetry run alembic upgrade head
 ```
 
-### 5. Seed synthetic data
+### 4. Seed synthetic data
 ```bash
 poetry run python scripts/seed_db.py
 ```
 
-### 6. Backfill RAG knowledge base
+### 5. Backfill RAG knowledge base
 ```bash
 poetry run python scripts/backfill_embeddings.py
 ```
 
-### 7. Start the gateway
-```bash
-poetry run uvicorn services.gateway.main:app --reload --port 8000
+---
+
+## Running Locally
+
+### Option A — Automating All Services on Windows (No Docker)
+You can run the entire platform locally using the provided PowerShell scripts.
+
+To start the whole project (Database and Redis must be running):
+```powershell
+# Set ExecutionPolicy if needed, then run the startup script
+powershell -ExecutionPolicy Bypass -File .\start_local.ps1
+```
+This script validates your setup, verifies Redis connectivity, and launches 4 separate terminal windows running:
+1. **FastAPI Gateway** (`http://localhost:8000`)
+2. **Celery Worker** (`outreach`, `scoring`, `events`, `embeddings` queues)
+3. **Celery Beat** (Periodic tasks scheduler)
+4. **Vite Frontend Dev Server** (`http://localhost:5173`)
+
+To stop all background services and close their respective terminal windows:
+```powershell
+powershell -ExecutionPolicy Bypass -File .\stop_local.ps1
 ```
 
-### 8. Start Celery workers (separate terminal)
+### Option B — Run Services Manually
+
+1. **Start the gateway**:
+   ```bash
+   poetry run uvicorn services.gateway.main:app --reload --port 8000
+   ```
+2. **Start Celery workers** (Windows must use `--pool=solo`):
+   ```bash
+   poetry run celery -A services.workers.celery_app worker --loglevel=info -Q outreach,scoring,events,embeddings --pool=solo
+   ```
+3. **Start Celery Beat**:
+   ```bash
+   poetry run celery -A services.workers.celery_app beat --loglevel=info --scheduler celery.beat:PersistentScheduler
+   ```
+4. **Start Vite frontend**:
+   ```bash
+   cd frontend
+   npm run dev
+   ```
+
+Open `http://localhost:5173` in your browser.
+Log in with demo credentials:
+* **RM 1**: Email: `arjun@bank.com` / Password: `password123`
+* **RM 2**: Email: `priya@bank.com` / Password: `password123`
+
+---
+
+## Performance Optimization & Connection Re-use
+
+To reduce Queue & Dispatch latency (minimizing time gaps when an RM clicks **Approve & Dispatch** in the UI), we optimized the connection lifecycle of our workers:
+* **Connection Re-use**: Celery worker tasks now import and reuse `AsyncSessionLocal` from [session.py](file:///c:/Users/rajat/Desktop/crm-agent/shared/db/session.py) instead of spinning up a new SQLAlchemy database engine (`create_async_engine`) and disposing of it on every single task run.
+* **Handshake Elimination**: This eliminates the expensive TCP and SSL handshake latency overhead (especially noticeable on serverless/cloud databases like Neon), reducing database session start times in workers to near `0ms`.
+
+---
+
+## Testing & Developer Utilities
+
+To make local testing and campaign dispatches easy, we included several developer scripts under the `scratch/` and `scripts/` directories:
+
+### 1. Update Test Phone Numbers
+To route all outbound SMS and WhatsApp messages to your own mobile device instead of dummy database records, run the phone update utility:
 ```bash
-# Linux / macOS:
-poetry run celery -A services.workers.celery_app worker --loglevel=info -Q outreach,scoring,events,embeddings
-
-# Windows (must use solo pool — prefork is not supported):
-poetry run celery -A services.workers.celery_app worker --loglevel=info -Q outreach,scoring,events,embeddings --pool=solo
+# Modifies the 'phone' column for all customer rows in the DB
+poetry run python scratch/update_phones.py
 ```
-> **Important**: The Celery worker must be running for outreach dispatch (WhatsApp/SMS/Email) to work. Without it, approved messages will stay in "pending" status indefinitely.
 
-### 9. Start frontend dashboard (separate terminal)
+### 2. Direct Campaign Dispatch
+To test the Celery unmasking and Twilio API payload generation locally and synchronously without queuing:
 ```bash
-cd frontend
-npm install
-npm run dev
+poetry run python scratch/test_dispatch.py
 ```
-Open http://localhost:5173 in your browser.
-Log in with demo relationship manager credentials:
-- **RM 1**: Email: `arjun@bank.com` / Password: `password123`
-- **RM 2**: Email: `priya@bank.com` / Password: `password123`
+This utility grabs the latest campaign draft, unmasks the recipient's phone number, triggers the compliance rules, runs the dispatch, and prints the Twilio message SID.
 
-### 10. WhatsApp Sandbox Setup (Twilio)
+### 3. Batch Dispatching Pending Campaigns
+To batch dispatch all unsent campaign drafts in the database with optional contact overrides:
+```bash
+# Dispatch all pending email/whatsapp/sms drafts
+poetry run python scripts/dispatch_pending.py
+
+# Dispatch all drafts, redirecting them to your personal test credentials
+poetry run python scripts/dispatch_pending.py --phone +919999999999 --email you@example.com
+```
+
+### 4. Running the Test Suite
+```bash
+poetry run pytest tests/ -v
+```
+
+---
+
+## WhatsApp Sandbox Setup (Twilio)
 To receive dispatched WhatsApp messages on your phone during demo:
 
 1. Go to [Twilio Console → Messaging → Try it out → Send a WhatsApp message](https://console.twilio.com/us1/develop/sms/try-it-out/whatsapp-learn)
 2. Note your sandbox code (e.g., `join fix-community`)
-3. From your phone, send that message to **+1 415 523 8886** on WhatsApp
+3. From your phone, send that message to **+1 415 523 8886** on WhatsApp.
 4. Once joined, update `.env` with your Twilio credentials:
-   ```
+   ```env
    TWILIO_ACCOUNT_SID=your_account_sid
    TWILIO_AUTH_TOKEN=your_auth_token
+   WHATSAPP_PHONE_NUMBER_ID=+14155238886
    ```
-5. Ensure your phone number is set in the customers table (all demo customers default to a sandbox-verified number)
-6. Generate and approve an outreach → message arrives on your WhatsApp within seconds
-
-### API Documentation
-After starting the gateway, visit:
-- Swagger UI: http://localhost:8000/docs
-- ReDoc: http://localhost:8000/redoc
-- Health: http://localhost:8000/health
-
-### Run tests
-```bash
-poetry run pytest tests/ -v --cov=services --cov=shared
-```
-
----
-
-## Repository Structure
-
-See the full directory tree in `docs/architecture/README.md`.
+5. Ensure your test phone number is updated in the database (or run the `scratch/update_phones.py` script).
+6. Generate and approve an outreach → the message will arrive on your WhatsApp device.
 
 ---
 
 *Built for enterprise banking — production-quality architecture, not a prototype.*
-"# agentic-banking-crm" 
